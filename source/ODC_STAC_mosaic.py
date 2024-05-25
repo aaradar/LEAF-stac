@@ -99,7 +99,7 @@ def get_STAC_IC(CatalogName, CollName, Region, ProjStr, StartStr, EndStr):
   # s2:snow_ice_percentage, etc.
   # 
   #==================================================================================================
-  filters = {"s2:cloud_shadow_percentage": {"lt": 0.8} }
+  filters = {"s2:cloud_shadow_percentage": {"lt": 0.9} }
 
   #==================================================================================================
   # Search and filter a image collection
@@ -115,8 +115,7 @@ def get_STAC_IC(CatalogName, CollName, Region, ProjStr, StartStr, EndStr):
   
   #first_item = items[0].to_dict()
   #print(first_item)
-
-  resolu = get_resolution(items)
+  #resolu = get_resolution(items)
 
   '''
   # Spit out data as GeoJSON dictionary  
@@ -139,10 +138,11 @@ def get_STAC_IC(CatalogName, CollName, Region, ProjStr, StartStr, EndStr):
 
   ds_xr = odc.stac.load(search_IC.items(),
                         bands  = band_names,
-                        chunks = {'time': 5, 'x': 600, 'y': 600},
+                        #groupby='solar_day',
+                        chunks = {'time': 5, 'x': 1000, 'y': 1000},
                         crs = ProjStr, 
                         #geobox = ottawa_region,
-                        resolution = resolu)
+                        resolution = 100)
 
   # actually load it
   with ProgressBar():
