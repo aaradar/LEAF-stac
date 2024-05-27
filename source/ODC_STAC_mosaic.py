@@ -327,13 +327,117 @@ def get_STAC_ImColl(S2A_sensor, Region, ProjStr, Scale, StartStr, EndStr, GroupB
 # Revision history:  2024-May-24  Lixin Sun  Initial creation
 # 
 #############################################################################################################
-def attach_score(xr_Img_coll):
-  red = xr_Img_coll.red
-  blu = xr_Img_coll.blue
+def attach_score(inImg):
+  red = inImg.red
+  nir = inImg.nir08
 
-  xr_Img_coll['score'] = red - blu
+  inImg['score'] = (nir - red)/(nir + red)
 
-  return xr_Img_coll
+  return inImg
+
+
+
+
+
+#############################################################################################################
+# Description: This function returns a mosaic image for a sub-region
+#
+# Revision history:  2024-May-24  Lixin Sun  Initial creation
+# 
+#############################################################################################################
+def get_sub_mosaic(S2A_sensor, SubRegion, ProjStr, Scale, StartStr, EndStr):
+  # get all query conditions 
+  query_conds = get_query_conditions(S2A_sensor, StartStr, EndStr)
+
+  # use publically available stac link such as
+  catalog = pystac_client.Client.open(str(query_conds['catalog'])) 
+
+  #==================================================================================================
+  # Search and filter a image collection
+  #==================================================================================================  
+  search_IC = catalog.search(collections = [str(query_conds['collection'])], 
+                             intersects  = SubRegion,                            
+                             datetime    = str(query_conds['timeframe']), 
+                             query       = query_conds['filters'],
+                             limit       = 200)
+  
+  items = list(search_IC.items())
+  print(f"Found: {len(items):d} datasets")
+    
+  #==================================================================================================
+  # lazily combine items
+  #==================================================================================================
+  mybbox = get_region_bbox(SubRegion)
+  print('<get_STAC_ImColl> The bbox of the given region = ', mybbox)
+
+  raw_IC = odc.stac.load(search_IC.items(),
+                        bands  = query_conds['bands'],
+                        groupby='solar_day',  #For lower latitude scenses, save a lot memories
+                        chunks = {'x': 1000, 'y': 1000},
+                        crs    = ProjStr, 
+                        bbox   = mybbox,
+                        resolution = Scale)
+
+  # actually load it
+  with ProgressBar():
+    raw_IC.load()
+
+  #==================================================================================================
+  # Apply default pixel mask to each of the images
+  #==================================================================================================
+  scl = raw_IC.scl
+  condition = (raw_IC > 0) & (scl != 3) & (scl != 8) & (scl != 9)  # & (scl != 10)
+  masked_IC = raw_IC.where(condition)
+  
+  #==================================================================================================
+  # Apply default pixel mask to each of the images
+  #==================================================================================================
+  scored_IC = attach_score(masked_IC)
+
+  return scored_IC.isel(time=0)
+  base_img = base_img.where(base_img.score > reindexed_sub_mosaic.score, base_img, reindexed_sub_mosaic)
+
+
+  return masked_IC.median(dim='time')
+
+
+
+#############################################################################################################
+# Description: This function returns a mosaic image for a sub-region
+#
+# Revision history:  2024-May-24  Lixin Sun  Initial creation
+# 
+#############################################################################################################
+def period_mosaic(S2A_sensor, Region, ProjStr, Scale, StartStr, EndStr):
+  #==========================================================================================================
+  # Create a base image that has full spatial dimensions of the specified region
+  #==========================================================================================================
+  base_img = get_base_Image(S2A_sensor, Region, ProjStr, Scale, StartStr, EndStr)
+  
+  base_img = attach_score(base_img)*0.0
+  base_img = base_img.where(base_img > 0)
+  
+  #==========================================================================================================
+  # Create individual sub-mosaic and combine it into base image based on score
+  #==========================================================================================================
+  sub_regions = divide_region(Region, 3)
+
+  for sub_region in sub_regions:
+    print('<period_mosaic> create a sub-mosaic for ', sub_region)
+    sub_polygon = {'type': 'Polygon',  'coordinates': [sub_region] }
+
+    sub_mosaic = get_sub_mosaic(S2A_sensor, sub_polygon, ProjStr, Scale, StartStr, EndStr)
+    
+    sub_mosaic = attach_score(sub_mosaic)
+    sub_mosaic = sub_mosaic.where(sub_mosaic > 0)    
+
+    #base_img = xr.merge([base_img, sub_mosaic], compat='override') # Didn't work
+    base_img = base_img.combine_first(sub_mosaic)
+
+  return base_img
+  
+
+
 
 
 
