@@ -10,8 +10,8 @@ from pystac_client.client import Client
 
 from pystac_client.stac_api_io import StacApiIO
 stac_api_io = StacApiIO()
-stac_api_io.session.verify = "C:\\Users\\lsun\\nrcan+azure+amazon.cer"
-#stac_api_io.session.verify = "C:/Users/lsun/nrcan+azure+amazon.cer"
+stac_api_io.session.verify = "C:\\Users\\lsun\\nrcan_azure_amazon.cer"
+
 
 import odc.stac
 from dask.diagnostics import ProgressBar
