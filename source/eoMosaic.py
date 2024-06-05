@@ -517,7 +517,7 @@ def period_mosaic(inParams):
   SsrData = eoIM.SSR_META_DICT[str(params['sensor'])]
   ProjStr = str(params['projection'])
   ProjStr = str(params['projection'])
-  Scale   = int(params['spatial_scale'])
+  Scale   = int(params['resolution'])
 
   Region  = eoPM.get_spatial_region(params)
   StartStr, EndStr = eoPM.get_time_window(params)  
@@ -610,25 +610,26 @@ def export_mosaic(inParams, inMosaic):
 
 
 
-'''
+
 params = {
     'sensor': 'S2_SR',           # A sensor type string (e.g., 'S2_SR' or 'L8_SR' or 'MOD_SR')
     'unit': 2,                   # A data unit code (1 or 2 for TOA or surface reflectance)    
-    'year': 2023,                # An integer representing image acquisition year
+    'year': 2022,                # An integer representing image acquisition year
     'nbYears': -1,               # positive int for annual product, or negative int for monthly product
     'months': [8],               # A list of integers represening one or multiple monthes     
-    'tile_name': 'tile42',       # A list of (sub-)tile names (defined using CCRS' tile griding system) 
+    'tile_name': 'tile42_411',   # A list of (sub-)tile names (defined using CCRS' tile griding system) 
     'prod_names': ['mosaic'],    #['mosaic', 'LAI', 'fCOVER', ]    
-    'resolution': 20,            # Exporting spatial resolution    
+    'resolution': 200,            # Exporting spatial resolution    
     'folder': '',                # the folder name for exporting
     'buff_radius': 10, 
     'tile_scale': 4,
     'CloudScore': True,
 
-    'start_date': '2022-06-15',
-    'end_date': '2023-09-15'
+    #'start_date': '2022-06-15',
+    #'end_date': '2023-09-15'
 }
-'''
+
+period_mosaic(params)
 
 
 '''

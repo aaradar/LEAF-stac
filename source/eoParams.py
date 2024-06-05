@@ -20,7 +20,7 @@ DefaultParams = {
     'months': [5,6,7,8,9,10],    # A list of integers represening one or multiple monthes     
     'tile_names': ['tile55'],    # A list of (sub-)tile names (defined using CCRS' tile griding system) 
     'prod_names': ['mosaic'],    # ['mosaic', 'LAI', 'fCOVER', ]
-    'spatial_scale': 30,         # Exporting spatial resolution
+    'resolution': 30,            # Exporting spatial resolution
     'out_folder': '',            # the folder name for exporting
     'export_style': 'separate',
     'start_date': '',
