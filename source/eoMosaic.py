@@ -8,9 +8,9 @@ import pandas as pd
 import xarray as xr
 from pystac_client.client import Client
 
-from pystac_client.stac_api_io import StacApiIO
-stac_api_io = StacApiIO()
-stac_api_io.session.verify = "C:\\Users\\lsun\\nrcan_azure_amazon.cer"
+#from pystac_client.stac_api_io import StacApiIO
+#stac_api_io = StacApiIO()
+#stac_api_io.session.verify = "C:\\Users\\lsun\\nrcan_azure_amazon.cer"
 
 
 import odc.stac
@@ -140,9 +140,8 @@ def get_base_Image(SsrData, Region, ProjStr, Scale, StartStr, EndStr):
   query_conds = get_query_conditions(SsrData, StartStr, EndStr)
 
   # use publically available stac link such as
-  catalog = Client.from_file(query_conds['catalog'], stac_io = stac_api_io)
-  #catalog = Client.open(query_conds['catalog'], stac_io = stac_api_io)
-  #catalog = Client.open(str(query_conds['catalog'])) 
+  #catalog = Client.from_file(query_conds['catalog'], stac_io = stac_api_io)
+  catalog = Client.open(str(query_conds['catalog'])) 
 
   #==================================================================================================
   # Search and filter a image collection
@@ -201,7 +200,6 @@ def get_STAC_ImColl(SsrData, Region, ProjStr, Scale, StartStr, EndStr, GroupBy=T
 
   # use publically available stac link such as
   #catalog = Client.from_file(query_conds['catalog'], stac_io = stac_api_io)
-  #catalog = Client.open(query_conds['catalog'], stac_io = stac_api_io)
   catalog = Client.open(str(query_conds['catalog'])) 
 
   #==================================================================================================
@@ -436,9 +434,8 @@ def get_sub_mosaic(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr):
   query_conds = get_query_conditions(SsrData, StartStr, EndStr)
 
   # use publically available stac link such as
-  catalog = Client.from_file(query_conds['catalog'], stac_io = stac_api_io)
-  #catalog = Client.open(query_conds['catalog'], stac_io = stac_api_io)
-  #catalog = Client.open(str(query_conds['catalog'])) 
+  #catalog = Client.from_file(query_conds['catalog'], stac_io = stac_api_io)  
+  catalog = Client.open(str(query_conds['catalog'])) 
 
   #==================================================================================================
   # Search and filter a image collection
