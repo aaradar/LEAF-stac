@@ -1,20 +1,19 @@
 
 import os
 import math
-from datetime import datetime, timedelta
+from datetime import datetime
 import numpy as np
 import pandas as pd
 
 import xarray as xr
-from pystac_client.client import Client
-
-#from pystac_client.stac_api_io import StacApiIO
-#stac_api_io = StacApiIO()
-#stac_api_io.session.verify = "C:\\Users\\lsun\\nrcan_azure_amazon.cer"
-
-
+import pystac_client as psc
 import odc.stac
-from dask.diagnostics import ProgressBar
+import dask.diagnostics as ddiag
+
+stac_api_io = psc.stac_api_io.StacApiIO()
+stac_api_io.session.verify = "C:/Users/lsun/nrcan_azure_amazon.cer"
+
+odc.stac.configure_rio(cloud_defaults = True, GDAL_HTTP_UNSAFESSL = 'YES')
 
 # The two things must be noted:
 # (1) this line must be used after "import odc.stac"
@@ -28,16 +27,12 @@ import eoParams as eoPM
 
 
 
-
-
 #==================================================================================================
 # define a spatial region around Ottawa
 #==================================================================================================
-ottawa_region = {'type': 'Polygon', 'coordinates': [[[-76.120,45.184], [-75.383,45.171], [-75.390,45.564], [-76.105,45.568], [-76.120,45.184]]]}
+# ottawa_region = {'type': 'Polygon', 'coordinates': [[[-76.120,45.184], [-75.383,45.171], [-75.390,45.564], [-76.105,45.568], [-76.120,45.184]]]}
 
-tile55_922 = {'type': 'Polygon', 'coordinates': [[[-77.6221, 47.5314], [-73.8758, 46.7329], [-75.0742, 44.2113], [-78.6303, 44.9569], [-77.6221, 47.5314]]]}
-
-
+# tile55_922 = {'type': 'Polygon', 'coordinates': [[[-77.6221, 47.5314], [-73.8758, 46.7329], [-75.0742, 44.2113], [-78.6303, 44.9569], [-77.6221, 47.5314]]]}
 
 
 
@@ -48,14 +43,12 @@ tile55_922 = {'type': 'Polygon', 'coordinates': [[[-77.6221, 47.5314], [-73.8758
 #       simply a string such as "2020-06-01/2020-09-30"
 #==================================================================================================
 # Define a timeframe using datetime functions
-year = 2020
-month = 1
+# year = 2020
+# month = 1
 
-start_date = datetime(year, month, 1)
-end_date   = start_date + timedelta(days=31)
-timeframe  = start_date.strftime("%Y-%m-%d") + "/" + end_date.strftime("%Y-%m-%d")
-
-
+# start_date = datetime(year, month, 1)
+# end_date   = start_date + timedelta(days=31)
+# timeframe  = start_date.strftime("%Y-%m-%d") + "/" + end_date.strftime("%Y-%m-%d")
 
 
 
@@ -140,8 +133,8 @@ def get_base_Image(SsrData, Region, ProjStr, Scale, StartStr, EndStr):
   query_conds = get_query_conditions(SsrData, StartStr, EndStr)
 
   # use publically available stac link such as
-  #catalog = Client.from_file(query_conds['catalog'], stac_io = stac_api_io)
-  catalog = Client.open(str(query_conds['catalog'])) 
+  catalog = psc.client.Client.from_file(query_conds['catalog'], stac_io = stac_api_io)
+  #catalog = psc.client.Client.open(str(query_conds['catalog'])) 
 
   #==================================================================================================
   # Search and filter a image collection
@@ -171,7 +164,7 @@ def get_base_Image(SsrData, Region, ProjStr, Scale, StartStr, EndStr):
                         resolution = Scale)
 
   # actually load it
-  with ProgressBar():
+  with ddiag.ProgressBar():
     ds_xr.load()
   #with warn.catch_warnings():
   #  warn.simplefilter('ignore') # Avoids RuntimeWarning about All-NaN slices
@@ -199,8 +192,8 @@ def get_STAC_ImColl(SsrData, Region, ProjStr, Scale, StartStr, EndStr, GroupBy=T
   query_conds = get_query_conditions(SsrData, StartStr, EndStr)
 
   # use publically available stac link such as
-  #catalog = Client.from_file(query_conds['catalog'], stac_io = stac_api_io)
-  catalog = Client.open(str(query_conds['catalog'])) 
+  catalog = psc.client.Client.from_file(query_conds['catalog'], stac_io = stac_api_io)
+  #catalog = psc.client.Client.open(str(query_conds['catalog'])) 
 
   #==================================================================================================
   # Search and filter a image collection
@@ -434,8 +427,8 @@ def get_sub_mosaic(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr):
   query_conds = get_query_conditions(SsrData, StartStr, EndStr)
 
   # use publically available stac link such as
-  #catalog = Client.from_file(query_conds['catalog'], stac_io = stac_api_io)  
-  catalog = Client.open(str(query_conds['catalog'])) 
+  catalog = psc.client.Client.from_file(query_conds['catalog'], stac_io = stac_api_io)
+  #catalog = psc.client.Client.open(str(query_conds['catalog'])) 
 
   #==================================================================================================
   # Search and filter a image collection
@@ -464,7 +457,7 @@ def get_sub_mosaic(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr):
                         resolution = Scale)
 
   # actually load it
-  with ProgressBar():
+  with ddiag.ProgressBar():
     raw_IC.load()
   
   #==================================================================================================
