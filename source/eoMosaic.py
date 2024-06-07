@@ -10,8 +10,13 @@ import pystac_client as psc
 import odc.stac
 import dask.diagnostics as ddiag
 
-stac_api_io = psc.stac_api_io.StacApiIO()
-stac_api_io.session.verify = "C:/Users/lsun/nrcan_azure_amazon.cer"
+# certificate_path = "C:/Users/lsun/nrcan_azure_amazon.cer"
+# if os.path.exists(certificate_path):
+#   stac_api_io = psc.stac_api_io.StacApiIO()
+#   stac_api_io.session.verify = certificate_path
+#   print("stac_api_io.session.verify = {}".format(stac_api_io.session.verify))
+# else:
+#   print("Certificate file {} does not exist:".format(certificate_path))
 
 odc.stac.configure_rio(cloud_defaults = True, GDAL_HTTP_UNSAFESSL = 'YES')
 
@@ -133,8 +138,8 @@ def get_base_Image(SsrData, Region, ProjStr, Scale, StartStr, EndStr):
   query_conds = get_query_conditions(SsrData, StartStr, EndStr)
 
   # use publically available stac link such as
-  catalog = psc.client.Client.from_file(query_conds['catalog'], stac_io = stac_api_io)
-  #catalog = psc.client.Client.open(str(query_conds['catalog'])) 
+  #catalog = psc.client.Client.from_file(query_conds['catalog'], stac_io = stac_api_io)
+  catalog = psc.client.Client.open(str(query_conds['catalog'])) 
 
   #==================================================================================================
   # Search and filter a image collection
@@ -154,7 +159,7 @@ def get_base_Image(SsrData, Region, ProjStr, Scale, StartStr, EndStr):
   #==================================================================================================
   # lazily combine items
   mybbox = eoUs.get_region_bbox(Region)
-  print('<get_STAC_ImColl> The bbox of the given region = ', mybbox)
+  print('<get_base_Image> The bbox of the given region = ', mybbox)
 
   ds_xr = odc.stac.load([items[0], items[1]],
                         bands  = query_conds['bands'],
@@ -192,8 +197,8 @@ def get_STAC_ImColl(SsrData, Region, ProjStr, Scale, StartStr, EndStr, GroupBy=T
   query_conds = get_query_conditions(SsrData, StartStr, EndStr)
 
   # use publically available stac link such as
-  catalog = psc.client.Client.from_file(query_conds['catalog'], stac_io = stac_api_io)
-  #catalog = psc.client.Client.open(str(query_conds['catalog'])) 
+  #catalog = psc.client.Client.from_file(query_conds['catalog'], stac_io = stac_api_io)
+  catalog = psc.client.Client.open(str(query_conds['catalog'])) 
 
   #==================================================================================================
   # Search and filter a image collection
@@ -427,8 +432,8 @@ def get_sub_mosaic(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr):
   query_conds = get_query_conditions(SsrData, StartStr, EndStr)
 
   # use publically available stac link such as
-  catalog = psc.client.Client.from_file(query_conds['catalog'], stac_io = stac_api_io)
-  #catalog = psc.client.Client.open(str(query_conds['catalog'])) 
+  #catalog = psc.client.Client.from_file(query_conds['catalog'], stac_io = stac_api_io)
+  catalog = psc.client.Client.open(str(query_conds['catalog'])) 
 
   #==================================================================================================
   # Search and filter a image collection
@@ -446,7 +451,7 @@ def get_sub_mosaic(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr):
   # lazily combine items
   #==================================================================================================
   mybbox = eoUs.get_region_bbox(SubRegion)
-  print('<get_STAC_ImColl> The bbox of the given region = ', mybbox)
+  print('<get_sub_mosaic> The bbox of the given region = ', mybbox)
 
   raw_IC = odc.stac.load(search_IC.items(),
                         bands  = query_conds['bands'],
@@ -508,8 +513,12 @@ def period_mosaic(inParams):
   #==========================================================================================================
   # Obtain required parameters
   #==========================================================================================================
-  params  = eoPM.get_mosaic_params(inParams)
-
+  params = eoPM.get_mosaic_params(inParams)
+  
+  if params == None:
+    print('<period_mosaic> Cannot create a mosaic image due to invalid input parameter!')
+    return None
+  
   SsrData = eoIM.SSR_META_DICT[str(params['sensor'])]
   ProjStr = str(params['projection'])  
   Scale   = int(params['resolution'])
@@ -589,7 +598,7 @@ def export_mosaic(inParams, inMosaic):
   #==========================================================================================================
   # Create individual sub-mosaic and combine it into base image based on score
   #==========================================================================================================
-  spa_scale  = params['spatial_scale']
+  spa_scale  = params['resolution']
   
   if 'sepa' in export_style:
     for band in rio_mosaic.data_vars:
@@ -605,27 +614,29 @@ def export_mosaic(inParams, inMosaic):
 
 
 
-'''
-params = {
-    'sensor': 'S2_SR',           # A sensor type string (e.g., 'S2_SR' or 'L8_SR' or 'MOD_SR')
-    'unit': 2,                   # A data unit code (1 or 2 for TOA or surface reflectance)    
-    'year': 2022,                # An integer representing image acquisition year
-    'nbYears': -1,               # positive int for annual product, or negative int for monthly product
-    'months': [8],               # A list of integers represening one or multiple monthes     
-    'tile_name': 'tile42_411',   # A list of (sub-)tile names (defined using CCRS' tile griding system) 
-    'prod_names': ['mosaic'],    #['mosaic', 'LAI', 'fCOVER', ]    
-    'resolution': 200,            # Exporting spatial resolution    
-    'folder': '',                # the folder name for exporting
-    'buff_radius': 10, 
-    'tile_scale': 4,
-    'CloudScore': True,
 
-    #'start_date': '2022-06-15',
-    #'end_date': '2023-09-15'
-}
+# params = {
+#     'sensor': 'S2_SR',           # A sensor type string (e.g., 'S2_SR' or 'L8_SR' or 'MOD_SR')
+#     'unit': 2,                   # A data unit code (1 or 2 for TOA or surface reflectance)    
+#     'year': 2022,                # An integer representing image acquisition year
+#     'nbYears': -1,               # positive int for annual product, or negative int for monthly product
+#     'months': [8],               # A list of integers represening one or multiple monthes     
+#     'tile_name': 'tile42_922',   # A list of (sub-)tile names (defined using CCRS' tile griding system) 
+#     'prod_names': ['mosaic'],    #['mosaic', 'LAI', 'fCOVER', ]    
+#     'resolution': 1000,          # Exporting spatial resolution    
+#     'folder': 'C:/Work_documents/test_xr_output',                # the folder name for exporting
+#     'buff_radius': 10, 
+#     'tile_scale': 4,
+#     'CloudScore': True,
 
-period_mosaic(params)
-'''
+#     #'start_date': '2022-06-15',
+#     #'end_date': '2023-09-15'
+# }
+
+# mosaic = period_mosaic(params)
+
+# export_mosaic(params, mosaic)
+
 
 
 
