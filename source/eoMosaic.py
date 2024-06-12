@@ -111,12 +111,19 @@ def get_query_conditions(SsrData, StartStr, EndStr):
     query_conds['catalog']    = "https://earth-search.aws.element84.com/v1"
     query_conds['collection'] = "sentinel-2-l2a"
     query_conds['timeframe']  = str(StartStr) + '/' + str(EndStr)
-    query_conds['bands']      = ['blue', 'green', 'red', 'nir08', 'swir16', 'swir22', 'scl']
+    query_conds['bands']      = ['blue', 'green', 'red', 'rededge1', 'rededge2', 'rededge3', 'nir08', 'swir16', 'swir22', 'scl']
     query_conds['filters']    = {"s2:cloud_shadow_percentage": {"lt": 0.9} }
 
   elif ssr_code < eoIM.MAX_LS_CODE & ssr_code > 0:
     query_conds['catalog']    = "https://landsatlook.usgs.gov/stac-server"
     query_conds['collection'] = "landsat-c2l2-sr"
+    query_conds['timeframe']  = str(StartStr) + '/' + str(EndStr)
+    query_conds['bands']      = ['blue', 'green', 'red', 'nir08', 'swir16', 'swir22', 'qa_pixel']
+    query_conds['filters']    = ["eo:cloud_cover<10"]
+  
+  elif ssr_code == eoIM.HLS_sensor:
+    query_conds['catalog']    = "https://cmr.earthdata.nasa.gov/stac/LPCLOUD"
+    query_conds['collection'] = "HLSL30.v2.0"
     query_conds['timeframe']  = str(StartStr) + '/' + str(EndStr)
     query_conds['bands']      = ['blue', 'green', 'red', 'nir08', 'swir16', 'swir22', 'qa_pixel']
     query_conds['filters']    = ["eo:cloud_cover<10"]
@@ -615,23 +622,23 @@ def export_mosaic(inParams, inMosaic):
 
 
 
-params = {
-    'sensor': 'S2_SR',           # A sensor type string (e.g., 'S2_SR' or 'L8_SR' or 'MOD_SR')
-    'unit': 2,                   # A data unit code (1 or 2 for TOA or surface reflectance)    
-    'year': 2022,                # An integer representing image acquisition year
-    'nbYears': 1,                # positive int for annual product, or negative int for monthly product
-    'months': [8],               # A list of integers represening one or multiple monthes     
-    'tile_names': ['tile42_922'],   # A list of (sub-)tile names (defined using CCRS' tile griding system) 
-    'prod_names': ['mosaic'],    #['mosaic', 'LAI', 'fCOVER', ]    
-    'resolution': 1000,          # Exporting spatial resolution    
-    'out_folder': 'C:/Work_documents/test_xr_output',   # the folder name for exporting   
-    'CloudScore': True,
+# params = {
+#     'sensor': 'S2_SR',           # A sensor type string (e.g., 'S2_SR' or 'L8_SR' or 'MOD_SR')
+#     'unit': 2,                   # A data unit code (1 or 2 for TOA or surface reflectance)    
+#     'year': 2022,                # An integer representing image acquisition year
+#     'nbYears': 1,                # positive int for annual product, or negative int for monthly product
+#     'months': [8],               # A list of integers represening one or multiple monthes     
+#     'tile_names': ['tile42_922'],   # A list of (sub-)tile names (defined using CCRS' tile griding system) 
+#     'prod_names': ['mosaic'],    #['mosaic', 'LAI', 'fCOVER', ]    
+#     'resolution': 1000,          # Exporting spatial resolution    
+#     'out_folder': 'C:/Work_documents/test_xr_output',   # the folder name for exporting   
+#     'CloudScore': True,
 
-    #'start_date': '2022-06-15',
-    #'end_date': '2023-09-15'
-}
+#     #'start_date': '2022-06-15',
+#     #'end_date': '2023-09-15'
+# }
 
-mosaic = period_mosaic(params)
+# mosaic = period_mosaic(params)
 
 # export_mosaic(params, mosaic)
 

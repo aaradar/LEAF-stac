@@ -420,7 +420,6 @@ def get_time_window(inParams):
   else:
     current_month = inParams['current_month']
     if current_month > 0  and current_month < 13:
-
       # Extract veg parameters on a monthly basis
       return eoUs.month_range(inParams['year'], current_month)
     else:  
