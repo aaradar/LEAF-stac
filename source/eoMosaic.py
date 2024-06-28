@@ -1,6 +1,7 @@
 
 import os
 import math
+import time
 from datetime import datetime
 import numpy as np
 import pandas as pd
@@ -483,21 +484,44 @@ def get_sub_mosaic(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr):
   #==================================================================================================
   # Apply default pixel mask to each of the images
   #==================================================================================================
+  mask_start = time.time()
   scl = raw_IC.scl
   condition = (raw_IC > 0) & (scl != 3) & (scl != 8) & (scl != 9) & (scl != 1)
   masked_IC = raw_IC.where(condition)
+  mask_end = time.time()
+
+  mask_time = (mask_end - mask_start)/60
+  print('\n<get_sub_mosaic> Complete applying default mask, elapsed time = %6.2f minutes'%(mask_time))
 
   #==================================================================================================
   # Apply gain and offset to each band in a xarray dataset
-  #==================================================================================================
+  #==================================================================================================  
   ready_IC = eoIM.apply_gain_offset(masked_IC, SsrData, 100, False)
-  print('\nFinished applying gain and offset\n')
+  GO_end = time.time()  
+
+  GO_time = (GO_end - mask_end)/60
+  print('<get_sub_mosaic> Complete applying gain and offset, elapsed time = %6.2f minutes'%(GO_time))
   #==================================================================================================
   # Note: calling "fillna" function before invaking "argmax" function is very important!!!
   #==================================================================================================
   scored_IC   = attach_score(SsrData, ready_IC, StartStr, EndStr).fillna(-0.0001)
+  score_end   = time.time()
+
+  score_time = (score_end - GO_end)/60
+  print('<get_sub_mosaic> Complete pixel scoring, elapsed time = %6.2f minutes'%(score_time))
+
   max_indices = scored_IC[eoIM.pix_score].argmax(dim='time')
+  max_end  = time.time()
+
+  max_time = (max_end - score_end)/60
+  print('<get_sub_mosaic> Complete searching max indices, elapsed time = %6.2f minutes'%(max_time))
+
   sub_mosaic  = scored_IC.isel(time=max_indices)
+  mosaic_end  = time.time()
+
+  mosaic_time = (mosaic_end - max_end)/60
+  print('<get_sub_mosaic> Complete creating a sub mosaic, elapsed time = %6.2f minutes'%(mosaic_time))
+
 
   '''
   nImgs     = scored_IC.sizes['time']
@@ -553,7 +577,7 @@ def period_mosaic(inParams):
   #==========================================================================================================
   # Create individual sub-mosaic and combine it into base image based on score
   #==========================================================================================================
-  sub_regions = eoUs.divide_region(Region, 3)
+  sub_regions = eoUs.divide_region(Region, 2)
 
   for sub_region in sub_regions:
     print('<period_mosaic> create a sub-mosaic for ', sub_region)
@@ -641,6 +665,8 @@ def export_mosaic(inParams, inMosaic):
 #     'resolution': 1000,          # Exporting spatial resolution    
 #     'out_folder': 'C:/Work_documents/test_xr_output',   # the folder name for exporting   
 #     'CloudScore': True,
+#     'current_month': 8,
+#     'current_tile': 'tile42_922',
 
 #     #'start_date': '2022-06-15',
 #     #'end_date': '2023-09-15'

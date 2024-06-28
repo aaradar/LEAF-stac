@@ -265,9 +265,15 @@ def get_region_centre(inRegion):
 # 
 #############################################################################################################
 def divide_region(inRegion, nDivides):
-  if nDivides <= 0:
-    nDivides = 2
-
+  if nDivides <= 1:
+    nDivides = 1
+  
+  sub_regions = []  
+  if nDivides == 1:
+    #sub_polygon = {'type': 'Polygon',  'coordinates': [sub_region] }
+    sub_regions.append(inRegion['coordinates'][0])
+    return sub_regions
+  
   # Obtain the bbox of the given geographic region 
   bbox = get_region_bbox(inRegion)
   left_lon = bbox[0]
@@ -276,7 +282,6 @@ def divide_region(inRegion, nDivides):
   lon_delta = (bbox[2] - left_lon)/nDivides
   lat_delta = (bbox[3] - btom_Lat)/nDivides
 
-  sub_regions = []  
   for i in range(nDivides):    
     for j in range(nDivides):
       sub_region = []

@@ -117,19 +117,20 @@ def year_consist(inParams):
 #
 #############################################################################################################
 def set_time_str(inParams):
-  custon_window = is_custom_window(inParams)
-  current_month = inParams['current_month']
+  custon_window = is_custom_window(inParams)  
 
   if custon_window == True:
     inParams = year_consist(inParams)
     inParams['time_str'] = str(inParams['start_date']) + '_' + str(inParams['end_date'])
-
-  elif current_month > 0 and current_month < 13:
-    inParams['time_str'] = eoIM.get_MonthName(current_month)
-
+  
   else:
-    inParams['time_str'] = 'season'
+    current_month = inParams['current_month'] if len(str(inParams['current_month'])) > 0 else inParams['months'][0]  
 
+    if current_month > 0 and current_month < 13:
+      inParams['time_str'] = eoIM.get_MonthName(current_month)
+    else:
+      inParams['time_str'] = 'season'
+    
   return inParams
 
 
@@ -150,34 +151,17 @@ def set_region_str(inParams):
     inParams['region_str'] = 'custom_region'
     
   else:
-    inParams['region_str'] = inParams['current_tile']
+    current_tile = inParams['current_tile'] if len(str(inParams['current_tile'])) > 5 else inParams['tile_names'][0]  
+    
+    if eoTG.valid_tile_name(current_tile) == True:
+      inParams['region_str'] = current_tile
+    else:
+      print('<set_region_str> Invalid tile name provided!')
+      inParams['region_str'] = 'invalid_tile'
 
   return inParams
 
 
-
-# DefaultParams = {
-#     'sensor': 'S2_SR',           # A sensor type and data unit string (e.g., 'S2_SR' or 'L8_SR')    
-#     'unit': 2,                   # data unite (1=> TOA reflectance; 2=> surface reflectance)
-#     'year': 2019,                # An integer representing image acquisition year
-#     'nbYears': 1,                # positive int for annual product, or negative int for monthly product
-#     'months': [5,6,7,8,9,10],    # A list of integers represening one or multiple monthes     
-#     'tile_names': ['tile55'],    # A list of (sub-)tile names (defined using CCRS' tile griding system) 
-#     'prod_names': ['mosaic'],    # ['mosaic', 'LAI', 'fCOVER', ]
-#     'resolution': 30,            # Exporting spatial resolution
-#     'out_folder': '',            # the folder name for exporting
-#     'export_style': 'separate',
-#     'start_date': '',
-#     'end_date':  '',
-#     'scene_ID': '',
-#     'projection': 'EPSG:3979',
-#     'CloudScore': False,
-
-#     'current_month': -1,
-#     'current_tile': '',
-#     'time_str': '',              # Mainly for creating output filename
-#     'region_str': ''             # Mainly for creating output filename
-# }
 
 
 
@@ -297,22 +281,21 @@ def update_default_params(inParams):
   # Ensure "CloudScore" is False if sensor type is not Sentinel-2 data
   sensor_type = out_Params['sensor'].lower()
   if sensor_type.find('s2') < 0:
-    out_Params['CloudScore'] = False 
-  
+    out_Params['CloudScore'] = False   
 
   #==========================================================================================================
   # If a customized time window has been provided
   #==========================================================================================================
-  if is_custom_window(out_Params) == True:
+  #if is_custom_window(out_Params) == True:
     #Set value associated with 'time_str' key
-    out_Params = set_time_str(out_Params)
+  out_Params = set_time_str(out_Params)
  
   #==========================================================================================================
   # If a customized spatial region has been provided
   #==========================================================================================================
-  if is_custom_region(out_Params) == True: 
+  #if is_custom_region(out_Params) == True: 
     #Set value associated with 'region_str' key
-    out_Params = set_region_str(out_Params)
+  out_Params = set_region_str(out_Params)
   
   # return modified parameter dictionary 
   return out_Params
