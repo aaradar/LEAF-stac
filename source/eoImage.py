@@ -442,6 +442,7 @@ def get_cloud_rate(SsrData, Region):
 #                                            for different reflectance value ranges (either [0 to 1]
 #                                            or [0 to 100]) are returned.  
 #                    2024-May-28  Lixin Sun  Converted for odc-stac and xarray application
+#
 ###################################################################################################
 def get_gain_offset(SsrData, MaxRef):
   '''Returns a rescaling factor based on given sensor code and data unit.
@@ -472,16 +473,53 @@ def apply_gain_offset(xrDS, SsrData, MaxRef, all_bands):
        MaxREF: The maximum reflectance value (1 or 100);
        all_bands(Boolean): A flag indicating if apply gain and offset to all bands or not.''' 
   
+  #================================================================================================
+  # Apply gain and offset
+  #================================================================================================
   gain, offset = get_gain_offset(SsrData, MaxRef)
   #print('<apply_gain_offset> Rescaling gain and offset = \n',gain_offset[0], gain_offset[1])
-  
-  if all_bands == True:
-    return xrDS*gain + offset
-  else:
-    band_names = SsrData['ALL_BANDS']         # Get the names of all optical bands
-    operation  = lambda x: (x*gain + offset)  #.astype(np.float32)
+  band_names = SsrData['ALL_BANDS'] # Get the names of all optical bands
 
-    return xrDS.assign(**{var: operation(xrDS[var]) for var in band_names})
+  if all_bands == True:
+    xrDS = xrDS*gain + offset
+  else:    
+    apply_coeffs = lambda x: x*gain + offset
+
+    xrDS = xrDS.assign(**{var: apply_coeffs(xrDS[var]) for var in band_names})
+  
+  #================================================================================================
+  # Replace negative and small pixels values with 0.01
+  #================================================================================================
+  #min_val = 0.001
+  return xrDS   #.where(xrDS > min_val, min_val)
+
+
+
+
+
+
+###################################################################################################
+# Description: This function applys gain and offset to the optical bands of a given image.
+#
+# Revision history:  2024-May-28  Lixin Sun  Initial creation
+#
+###################################################################################################
+def apply_default_mask(xrDS, SsrData):
+  '''Returns a rescaling factor based on given sensor code and data unit.
+
+     Args:        
+       xrDS(xrDataset): A given xarray dataset object to which default mask will be applied  
+       SsrData(Dictionary): A Dictionary containing metadata associated with a sensor and data unit.''' 
+  
+  ssr_code = SsrData['SSR_CODE']
+
+  if ssr_code > MAX_LS_CODE and ssr_code < 25:  # For Sentinel-2 
+    scl = xrDS['scl']
+    # The pixels with SCL = 0 must be masked out
+    return xrDS.where((scl == 2) | ((scl > 3) & (scl < 8)) | (scl == 10))
+  
+  else:    
+    return xrDS
 
 
 

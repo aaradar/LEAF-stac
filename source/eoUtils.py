@@ -204,6 +204,8 @@ tile55_922 = {
 # Description: This function returns two lists containing latitudes and longitudes, respectively, from a
 #              given geographic region.
 #
+# Note:        For the coordinates of each vertex, longitude is always saved before latitude. 
+#
 # Revision history:  2024-May-28  Lixin Sun  Initial creation
 # 
 #############################################################################################################
@@ -212,15 +214,15 @@ def get_lats_lons(inRegion):
      Args:
         inRegion(dictionary): a given geographic region'''
   
-  coords = inRegion['coordinates'][0]
-  nCoords = len(coords)
+  coords  = inRegion['coordinates'][0]
+  nPoints = len(coords)
      
   lons = []
   lats = []
   
-  if nCoords > 0:
-    for i in range(nCoords):
-      lons.append(coords[i][0]) 
+  if nPoints > 0:
+    for i in range(nPoints):
+      lons.append(coords[i][0])    #longitude is always before latitude
       lats.append(coords[i][1])
 
   return lats, lons
@@ -244,15 +246,15 @@ def get_region_bbox(inRegion):
 
 
 #############################################################################################################
-# Description: This function returns central geographic coordinates of a given geographic region.
+# Description: This function returns central coordinates (long and lat) of a given polygon.
 #
 # Revision history:  2024-May-28  Lixin Sun  Initial creation
 # 
 #############################################################################################################
 def get_region_centre(inRegion):
-  lons, lats = get_region_bbox(inRegion)
+  bbox = get_region_bbox(inRegion)
   
-  return sum(lons)/len(lons), sum(lats)/len(lats)
+  return (bbox[0]+bbox[2])/2, (bbox[1]+bbox[3])/2
 
 
 
@@ -281,6 +283,44 @@ def divide_region(inRegion, nDivides):
 
   lon_delta = (bbox[2] - left_lon)/nDivides
   lat_delta = (bbox[3] - btom_Lat)/nDivides
+
+  for i in range(nDivides):    
+    for j in range(nDivides):
+      sub_region = []
+      BL_lon = left_lon+i*lon_delta
+      BL_lat = btom_Lat+j*lat_delta
+
+      sub_region.append([BL_lon, BL_lat])
+      sub_region.append([BL_lon+lon_delta, BL_lat])
+      sub_region.append([BL_lon+lon_delta, BL_lat+lat_delta])
+      sub_region.append([BL_lon, BL_lat+lat_delta])
+      sub_region.append([BL_lon, BL_lat])
+  
+      sub_regions.append(sub_region)
+  
+  return sub_regions
+
+
+
+
+#############################################################################################################
+# Description: This function divides a given bbox into a number of sub-bboxes
+#
+# Revision history:  2024-May-27  Lixin Sun  Initial creation
+# 
+#############################################################################################################
+def divide_bbox(inBbox, nDivides):
+  if nDivides <= 1:
+    nDivides = 1
+  
+  sub_regions = []
+  
+  # Obtain the bbox of the given geographic region 
+  left_lon = inBbox[0]
+  btom_Lat = inBbox[1]
+
+  lon_delta = (inBbox[2] - left_lon)/nDivides
+  lat_delta = (inBbox[3] - btom_Lat)/nDivides
 
   for i in range(nDivides):    
     for j in range(nDivides):

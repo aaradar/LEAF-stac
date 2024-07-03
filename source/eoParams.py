@@ -108,29 +108,28 @@ def year_consist(inParams):
 
 
 
-
 #############################################################################################################
-# Description: This function sets value for 'time_str' key based on if a customized time window has been 
-#              specified.
+# Description: This function sets values for 'current_month' and 'time_str' keys.
 # 
+# Note: If a customized time windows has been specified, then the given 'current_month' will be ignosed
+#
 # Revision history:  2024-Apr-08  Lixin Sun  Initial creation
 #
 #############################################################################################################
-def set_time_str(inParams):
+def set_current_time(inParams, current_month):
   custon_window = is_custom_window(inParams)  
 
   if custon_window == True:
     inParams = year_consist(inParams)
     inParams['time_str'] = str(inParams['start_date']) + '_' + str(inParams['end_date'])
   
-  else:
-    current_month = inParams['current_month'] if len(str(inParams['current_month'])) > 0 else inParams['months'][0]  
-
-    if current_month > 0 and current_month < 13:
-      inParams['time_str'] = eoIM.get_MonthName(current_month)
-    else:
-      inParams['time_str'] = 'season'
+  elif current_month > 0 and current_month < 13:
+    inParams['time_str']      = eoIM.get_MonthName(current_month)
+    inParams['current_month'] = current_month
     
+  else:
+    inParams['time_str'] = 'season'
+
   return inParams
 
 
@@ -138,26 +137,26 @@ def set_time_str(inParams):
 
 
 #############################################################################################################
-# Description: This function sets value for 'region_str' key based on if a customized spatial region has been 
-#              specified.
+# Description: This function sets values for 'current_tile' and 'region_str' keys
 # 
+# Note: If a customized spatial region has been specified, then the given 'current_tile' will be ignosed
+#
 # Revision history:  2024-Apr-08  Lixin Sun  Initial creation
 #
 #############################################################################################################
-def set_region_str(inParams):
+def set_current_region(inParams, current_tile):
   custon_region = is_custom_region(inParams)
 
   if custon_region == True:
-    inParams['region_str'] = 'custom_region'
+    inParams['region_str'] = 'custom_region'    
+
+  elif len(current_tile) > 5:
+    inParams['region_str']   = current_tile
+    inParams['current_tile'] = current_tile
     
   else:
-    current_tile = inParams['current_tile'] if len(str(inParams['current_tile'])) > 5 else inParams['tile_names'][0]  
-    
-    if eoTG.valid_tile_name(current_tile) == True:
-      inParams['region_str'] = current_tile
-    else:
-      print('<set_region_str> Invalid tile name provided!')
-      inParams['region_str'] = 'invalid_tile'
+    print('<set_region_str> Invalid tile name provided!')
+    inParams['region_str'] = 'invalid_tile'
 
   return inParams
 
@@ -270,10 +269,6 @@ def update_default_params(inParams):
   # get all the keys in the given dictionary
   inKeys = inParams.keys()  
   
-  # 'tile_names': ['tile55'],    # A list of (sub-)tile names (defined using CCRS' tile griding system) 
-  # 'prod_names': ['mosaic'],    # ['mosaic', 'LAI', 'fCOVER', ]  
-  # 'out_folder': '', 
-  
   # For each key in the given dictionary, modify corresponding "key:value" pair
   for key in inKeys:
     out_Params[key] = inParams.get(key)
@@ -281,21 +276,17 @@ def update_default_params(inParams):
   # Ensure "CloudScore" is False if sensor type is not Sentinel-2 data
   sensor_type = out_Params['sensor'].lower()
   if sensor_type.find('s2') < 0:
-    out_Params['CloudScore'] = False   
+    out_Params['CloudScore'] = False
 
   #==========================================================================================================
-  # If a customized time window has been provided
+  # Set values for 'current_month' and 'time_str' keys as necessary
   #==========================================================================================================
-  #if is_custom_window(out_Params) == True:
-    #Set value associated with 'time_str' key
-  out_Params = set_time_str(out_Params)
+  out_Params = set_current_time(out_Params, int(out_Params['months'][0]))
  
   #==========================================================================================================
-  # If a customized spatial region has been provided
+  # Set values for 'current_tile' and 'region_str' keys as necessary
   #==========================================================================================================
-  #if is_custom_region(out_Params) == True: 
-    #Set value associated with 'region_str' key
-  out_Params = set_region_str(out_Params)
+  out_Params = set_current_region(out_Params, str(out_Params['tile_names'][0]))
   
   # return modified parameter dictionary 
   return out_Params
