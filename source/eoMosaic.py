@@ -87,6 +87,25 @@ def get_resolution(xr_img_coll):
 
 
 
+def display_meta_assets(stac_items):
+  first_item = stac_items[0]
+
+  print('<<<<<<< The assets associated with an item >>>>>>>\n' )
+  for asset_key, asset in first_item.assets.items():
+    #print(f"Band: {asset_key}, Description: {asset.title or 'No title'}")
+    print(f"Asset key: {asset_key}, title: {asset.title}, href: {asset.href}")
+
+  print('<<<<<<< The meta data associated with an item >>>>>>>\n' )
+  print("ID:", first_item.id)
+  print("Geometry:", first_item.geometry)
+  print("Bounding Box:", first_item.bbox)
+  print("Datetime:", first_item.datetime)
+  print("Properties:")
+  for key, value in first_item.properties.items():
+    print(f"  <{key}>: {value}")
+
+
+
 #############################################################################################################
 # Description: This function returns the number of sub mosaics in all spatial dimension (X and Y)
 #
@@ -140,7 +159,7 @@ def get_query_conditions(SsrData, StartStr, EndStr):
     query_conds['collection'] = "sentinel-2-l2a"
     query_conds['timeframe']  = str(StartStr) + '/' + str(EndStr)
     query_conds['bands']      = ['blue', 'green', 'red', 'rededge1', 'rededge2', 'rededge3', 'nir08', 'swir16', 'swir22', 'scl']
-    query_conds['filters']    = {"s2:cloud_shadow_percentage": {"lt": 0.8} }
+    query_conds['filters']    = {"eo:cloud_cover": {"lt": 80.0} }    
 
   elif ssr_code < eoIM.MAX_LS_CODE and ssr_code > 0:
     #query_conds['catalog']    = "https://landsatlook.usgs.gov/stac-server"
@@ -150,14 +169,13 @@ def get_query_conditions(SsrData, StartStr, EndStr):
     query_conds['timeframe']  = str(StartStr) + '/' + str(EndStr)
     #query_conds['bands']      = ['OLI_B2', 'OLI_B3', 'OLI_B4', 'OLI_B5', 'OLI_B6', 'OLI_B7', 'qa_pixel']
     query_conds['bands']      = ['blue', 'green', 'red', 'nir08', 'swir16', 'swir22', 'qa_pixel']
-    query_conds['filters']    = ["eo:cloud_cover<10"]
-  
+    query_conds['filters']    = {"eo:cloud_cover": {"lt": 80.0}}  
   elif ssr_code == eoIM.HLS_sensor:
     query_conds['catalog']    = "https://cmr.earthdata.nasa.gov/stac/LPCLOUD"
     query_conds['collection'] = "HLSL30.v2.0"
     query_conds['timeframe']  = str(StartStr) + '/' + str(EndStr)
     query_conds['bands']      = ['blue', 'green', 'red', 'nir08', 'swir16', 'swir22', 'qa_pixel']
-    query_conds['filters']    = ["eo:cloud_cover<10"]
+    query_conds['filters']    = {"eo:cloud_cover": {"lt": 80.0}}  
 
   return query_conds
 
@@ -166,63 +184,62 @@ def get_query_conditions(SsrData, StartStr, EndStr):
 
 
 #############################################################################################################
-# Description: This function returns a base image.
+# Description: This function returns the results of searching a STAC catalog
 #
 # Revision history:  2024-May-24  Lixin Sun  Initial creation
 # 
 #############################################################################################################
-def search_STAC_Images(SsrData, Region, StartStr, EndStr, based_on_region):
-  # get all query conditions 
-  query_conds = get_query_conditions(SsrData, StartStr, EndStr)
+def search_STAC_Catalog(Region, Criteria, MaxImgs, based_on_region = True):
 
-  # use publically available stac link such as
-  #catalog = psc.client.Client.from_file(query_conds['catalog'], stac_io = stac_api_io)
-  catalog = psc.client.Client.open(str(query_conds['catalog'])) 
+  # use publically available stac 
+  catalog = psc.client.Client.open(str(Criteria['catalog'])) 
 
   #==================================================================================================
   # Search and filter a image collection
   #================================================================================================== 
   if based_on_region == True:
     print('<search_STAC_Images> The given region = ', Region)
-    search_IC = catalog.search(collections = [str(query_conds['collection'])], 
-                               intersects  = Region,                           
-                               datetime    = str(query_conds['timeframe']), 
-                               limit       = 500)
+    stac_catalog = catalog.search(collections = [str(Criteria['collection'])], 
+                                  intersects  = Region,                           
+                                  datetime    = str(Criteria['timeframe']), 
+                                  query       = Criteria['filters'],
+                                  limit       = MaxImgs)
+        
+    return list(stac_catalog.items())
+    
   else:
     Bbox = eoUs.get_region_bbox(Region)
     print('<search_STAC_Images> The bbox of the given region = ', Bbox)
 
-    search_IC = catalog.search(collections = [str(query_conds['collection'])], 
-                               bbox        = Bbox,                           
-                               datetime    = str(query_conds['timeframe']), 
-                               limit       = 500)
-
-  return search_IC
-
+    stac_catalog = catalog.search(collections = [str(Criteria['collection'])], 
+                                   bbox        = Bbox,                           
+                                   datetime    = str(Criteria['timeframe']), 
+                                   query       = Criteria['filters'],
+                                   limit       = MaxImgs)
+    
+    return list(stac_catalog.items())
 
 
 
 
 
 #############################################################################################################
-# Description: This function returns a base image.
+# Description: This function returns a base image covering entire spatial region.
 #
 # Revision history:  2024-May-24  Lixin Sun  Initial creation
 # 
 #############################################################################################################
 def get_base_Image(SsrData, Region, ProjStr, Scale, StartStr, EndStr):
+  start_time = time.time()
+
   # get all query conditions 
-  query_conds = get_query_conditions(SsrData, StartStr, EndStr)
+  criteria = get_query_conditions(SsrData, StartStr, EndStr)
 
-  searched_IC = search_STAC_Images(SsrData, Region, StartStr, EndStr, True)
-  
-  items = list(searched_IC.items())
-  print(f"Found: {len(items):d} datasets")
-  
-  #print('<<<<<<<get_base_Image>>>>>>> info on an item = ', items[0].to_dict())
-  for asset_key, asset in items[0].assets.items():
-    print(f"Band: {asset_key}, Description: {asset.title or 'No title'}")
+  stac_items = search_STAC_Catalog(Region, criteria, 5, True)
 
+  print(f"Found: {len(stac_items):d} datasets")
+  display_meta_assets(stac_items)
+  
   #==================================================================================================
   # define a geobox for my region
   #==================================================================================================
@@ -230,8 +247,8 @@ def get_base_Image(SsrData, Region, ProjStr, Scale, StartStr, EndStr):
   Bbox = eoUs.get_region_bbox(Region)
   print('<get_base_Image> The bbox of the given region = ', Bbox)
 
-  ds_xr = odc.stac.load([items[0], items[1]],
-                        bands  = query_conds['bands'],                        
+  ds_xr = odc.stac.load(stac_items[0:2],
+                        bands  = criteria['bands'],
                         groupby='solar_day',  
                         chunks = {'x': 1000, 'y': 1000},
                         crs    = ProjStr, 
@@ -239,17 +256,13 @@ def get_base_Image(SsrData, Region, ProjStr, Scale, StartStr, EndStr):
                         fail_on_error = False,
                         resolution = Scale)
   
-  # actually load it
+  # actually load all data into memory
   with ddiag.ProgressBar():
     ds_xr.load()
-  #with warn.catch_warnings():
-  #  warn.simplefilter('ignore') # Avoids RuntimeWarning about All-NaN slices
-  #with ddiag.ProgressBar():
-  #     #with rio.Env(GDAL_HTTP_UNSAFESSL = 'YES') as env: # Avoids NRCan network blocking access
-  #     # compute (returns python object fit in mem), persist (returns dask object), load (like compute but inplace)
-  #    cube = cube.load()
   
-  return ds_xr.isel(time=0)
+  stop_time = time.time() 
+  
+  return ds_xr.isel(time=0), (stop_time - start_time)/60
 
 
 
@@ -488,7 +501,7 @@ def get_spec_score(SsrData, inImg, median_blu, median_nir):
   STD_blu = blu.where(blu > 0, 0) + 1.0 
   #STD_blu = blu.where(blu > 1.0, refer_blu)   
     
-  land_score = max_IR/(STD_blu + blu_pen + nir_pen)  
+  land_score = (max_IR*100.0)/(STD_blu*100.0 + blu_pen + nir_pen)  
 
   return land_score.where((max_SV < max_IR) | (max_SW > 3.0), water_score)
   
@@ -503,69 +516,68 @@ def get_spec_score(SsrData, inImg, median_blu, median_nir):
 # 
 #############################################################################################################
 def get_sub_mosaic(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr):
-  
-  #full_IC = get_STAC_ImColl(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr)
+  start_time = time.time()
 
-  #==========================================================================================================
   # get all query conditions 
-  #==========================================================================================================
-  query_conds = get_query_conditions(SsrData, StartStr, EndStr)
+  criteria = get_query_conditions(SsrData, StartStr, EndStr)
 
   #==========================================================================================================
-  # Get a catalog object from STAC catalog available to public
-  #==========================================================================================================
-  #catalog = psc.client.Client.from_file(query_conds['catalog'], stac_io = stac_api_io)
-  catalog = psc.client.Client.open(str(query_conds['catalog'])) 
+  # Obtain all images from a STAC catalog
+  #========================================================================================================== 
+  stac_items = search_STAC_Catalog(SubRegion, criteria, 500, False)
+
+  print(f"Found: {len(stac_items):d} Images")
   
-  mybbox = eoUs.get_region_bbox(SubRegion)
-  print('<get_sub_mosaic> The bbox of the given region = ', mybbox)
-
-  #==========================================================================================================
-  # Search and filter a image collection within the catalog
-  #==========================================================================================================
-  search_IC = catalog.search(collections = [str(query_conds['collection'])], 
-                             #intersects  = SubRegion,
-                             bbox        = mybbox,
-                             datetime    = str(query_conds['timeframe']), 
-                             query       = query_conds['filters'],
-                             limit       = 500)
+  #==================================================================================================
+  # 
+  #==================================================================================================
+  xrDS = odc.stac.load(stac_items,
+                       bands  = criteria['bands'],
+                       groupby='solar_day',  #For lower latitude scenses, save a lot memories
+                       chunks = {'x': 1000, 'y': 1000},
+                       crs    = ProjStr, 
+                       #bbox   = mybbox,
+                       resolution = Scale)
   
-  items = list(search_IC.items())
-  print(f"<get_sub_mosaic> Found: {len(items):d} images")
-    
-  #==========================================================================================================
-  # Load all the STAC items as an xarray.Dataset object on a local machine
-  #==========================================================================================================
-  #chunk_size = get_chunk_size()
-
-  full_IC = odc.stac.load(search_IC.items(),
-                        bands  = query_conds['bands'],
-                        groupby='solar_day',  #For lower latitude scenses, save a lot memories
-                        #chunks = {'time': 30, 'x': 1000, 'y': 1000},
-                        chunks = {'x': 1000, 'y': 1000},
-                        fail_on_error = False,
-                        crs    = ProjStr, 
-                        #bbox   = mybbox,
-                        resolution = Scale)
-
   #==========================================================================================================
   # Actually load all data from a lazy-loaded dataset into in-memory Numpy arrays
   #==========================================================================================================
   with ddiag.ProgressBar():
-    full_IC.load()
+    xrDS.load()
   
   #==========================================================================================================
-  # Attach an empty layer (with all pixels equal to ZERO) to eath temporal item (an image here) in "raw_IC" 
+  # Attach an empty layer (with all pixels equal to ZERO) to eath temporal item (an image here) in "xrDS" 
   #==========================================================================================================
-  zero_img = full_IC[SsrData['BLU']]*0
-  full_IC[eoIM.pix_score] = zero_img
+  xrDS[eoIM.pix_score] = xrDS[SsrData['BLU']]*0
+  
+  xrDS['time'] = pd.to_datetime(xrDS['time'].values)
+  xrDS[eoIM.pix_date] = xr.DataArray(xrDS['time'].dt.dayofyear, dims=['time'])
+  
+  #================================================================================================
+  # Define a inner function for attaching imaging geometry angle bands to a S2 image
+  #================================================================================================
+  #solar_zenith = xrDS['solar:zenith']
+  '''
+  def attach_S2_angle_bands():
+    vza = Image.getNumber(SsrData['VZA'])
+    sza = Image.getNumber(SsrData['SZA'])    
 
+    vza_rad = ee.Image.constant(vza).multiply(rad)
+    sza_rad = ee.Image.constant(sza).multiply(rad)
+
+    raa     = Image.getNumber(SsrData['SAA']).subtract(Image.getNumber(SsrData['VAA']))
+    raa_rad = ee.Image.constant(raa.multiply(rad))
+    
+    return (Image.addBands(vza_rad.cos().rename(['cosVZA'])) \
+                 .addBands(sza_rad.cos().rename(['cosSZA'])) \
+                 .addBands(raa_rad.cos().rename(['cosRAA'])))  
+  '''
   #==========================================================================================================
   # Apply default pixel mask to each of the images
   #==========================================================================================================
   mask_start = time.time()
 
-  full_IC = eoIM.apply_default_mask(full_IC, SsrData)
+  xrDS = eoIM.apply_default_mask(xrDS, SsrData)
 
   mask_end = time.time()
   mask_time = (mask_end - mask_start)/60
@@ -575,12 +587,124 @@ def get_sub_mosaic(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr):
   # Apply gain and offset to each band in a xarray dataset
   #==========================================================================================================  
   GO_start = time.time()
-  full_IC = eoIM.apply_gain_offset(full_IC, SsrData, 100, False)
+  xrDS = eoIM.apply_gain_offset(xrDS, SsrData, 100, False)
   
   GO_end = time.time()  
   GO_time = (GO_end - GO_start)/60
   print('<get_sub_mosaic> Complete applying gain and offset, elapsed time = %6.2f minutes'%(GO_time))
 
+  #==========================================================================================================
+  # Note: calling "fillna" function before invaking "argmax" function is very important!!!
+  #==========================================================================================================
+  xrDS = attach_score(SsrData, xrDS, StartStr, EndStr).fillna(-0.0001)
+  score_end = time.time()
+
+  score_time = (score_end - GO_end)/60
+  print('<get_sub_mosaic> Complete pixel scoring, elapsed time = %6.2f minutes'%(score_time))
+
+  max_indices = xrDS[eoIM.pix_score].argmax(dim='time')
+  max_end  = time.time()
+
+  max_time = (max_end - score_end)/60
+  print('<get_sub_mosaic> Complete searching max indices, elapsed time = %6.2f minutes'%(max_time))
+
+  sub_mosaic  = xrDS.isel(time=max_indices)
+  mosaic_end  = time.time()
+
+  mosaic_time = (mosaic_end - max_end)/60
+  print('<get_sub_mosaic> Complete creating a sub mosaic, elapsed time = %6.2f minutes'%(mosaic_time))
+  print('\n\n<get_sub_mosaic> sub mosaic =', sub_mosaic)
+
+  return sub_mosaic    #.compute()
+
+
+
+
+
+
+#############################################################################################################
+# Description: This function returns a mosaic image for a sub-region
+#
+# Revision history:  2024-May-24  Lixin Sun  Initial creation
+# 
+#############################################################################################################
+def new_get_sub_mosaic(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr):
+  start_time = time.time()
+
+  # get all query conditions 
+  criteria = get_query_conditions(SsrData, StartStr, EndStr)
+
+  #==========================================================================================================
+  # Obtain all images from a STAC catalog
+  #========================================================================================================== 
+  stac_catalog = search_STAC_Catalog(SubRegion, criteria, 500, False)
+
+  stac_items = list(stac_catalog.items())
+  print(f"Found: {len(stac_items):d} datasets")
+  
+  #==================================================================================================
+  # 
+  #==================================================================================================
+  xrDS = odc.stac.load(stac_items,
+                       bands  = criteria['bands'],
+                       groupby='solar_day',  #For lower latitude scenses, save a lot memories
+                       chunks = {'x': 1000, 'y': 1000},
+                       crs    = ProjStr, 
+                       #bbox   = mybbox,
+                       resolution = Scale)
+  
+  #==========================================================================================================
+  # Actually load all data from a lazy-loaded dataset into in-memory Numpy arrays
+  #==========================================================================================================
+  #with ddiag.ProgressBar():
+  #  full_IC.load()
+  
+  #==========================================================================================================
+  # Attach an empty layer (with all pixels equal to ZERO) to eath temporal item (an image here) in "raw_IC" 
+  #==========================================================================================================
+  xrDS[eoIM.pix_score] = xrDS[SsrData['BLU']]*0
+
+  #==========================================================================================================
+  # Apply default pixel mask to each of the images
+  #==========================================================================================================
+  mask_start = time.time()
+  
+  valid_scl = xrDS.SCL.isin([2, 4, 5, 6, 7, 10])
+  xrDS = xrDS.where(valid_scl, drop=True)
+
+  mask_end = time.time()
+  mask_time = (mask_end - mask_start)/60
+  print('\n<get_sub_mosaic> Complete applying default mask, elapsed time = %6.2f minutes'%(mask_time))  
+
+  #==========================================================================================================
+  # Apply gain and offset to each band in a xarray dataset
+  #==========================================================================================================  
+  GO_start = time.time()
+  
+  band_names   = SsrData['ALL_BANDS'] # Get the names of all optical bands
+  gain, offset = eoIM.get_gain_offset(SsrData, 100)
+  apply_coeffs = lambda x: x*gain + offset
+
+  xrDS = xrDS.assign(**{band: apply_coeffs(xrDS[band]) for band in band_names})
+  
+  GO_end = time.time()  
+  GO_time = (GO_end - GO_start)/60
+  print('<get_sub_mosaic> Complete applying gain and offset, elapsed time = %6.2f minutes'%(GO_time))
+
+  '''
+  # Calculate NDVI
+  ndvi = (ds_scaled.B04 - ds_scaled.B03) / (ds_scaled.B04 + ds_scaled.B03)
+
+  # Select composite pixels based on maximum NDVI values
+  ndvi_max = ndvi.max(dim='time')
+  composite = ds_scaled.sel(time=ndvi.argmax(dim='time'))
+
+  # Add NDVI to the composite
+  composite['NDVI'] = ndvi_max
+
+  # Compute the result (this triggers the actual computation)
+  composite_result = composite.compute()
+  '''
   #==========================================================================================================
   # Note: calling "fillna" function before invaking "argmax" function is very important!!!
   #==========================================================================================================
@@ -603,49 +727,7 @@ def get_sub_mosaic(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr):
   print('<get_sub_mosaic> Complete creating a sub mosaic, elapsed time = %6.2f minutes'%(mosaic_time))
   print('\n\n<get_sub_mosaic> sub mosaic =', sub_mosaic)
 
-  '''
-  nImgs     = scored_IC.sizes['time']
-
-  sub_mosaic = scored_IC.isel(time=0)
-  #sub_img2   = scored_IC.isel(time=1)
-
-  #return sub_mosaic, sub_img2
-  for i in range(1, nImgs):
-    new_img    = scored_IC.isel(time=i)
-    sub_mosaic, new_img = xr.align(sub_mosaic, new_img, join='outer')
-
-    merged = sub_mosaic.where(sub_mosaic.score > new_img.score, sub_mosaic, new_img)
-    sub_mosaic = merged
-  '''
-
   return sub_mosaic    #.compute()
-
-
-
-
-
-# Mask out pixels according to the SCL band
-# Assuming valid pixels are those where SCL == 4 (vegetation), SCL == 5 (non-vegetated), or SCL == 6 (water)
-valid_scl = ds.SCL.isin([4, 5, 6])
-ds_masked = ds.where(valid_scl, drop=True)
-
-# Apply scaling factors to the pixels
-# Example scaling factors for Sentinel-2 L2A data: reflectance values are scaled by 0.0001
-scaling_factor = 0.0001
-ds_scaled = ds_masked * scaling_factor
-
-# Calculate NDVI
-ndvi = (ds_scaled.B04 - ds_scaled.B03) / (ds_scaled.B04 + ds_scaled.B03)
-
-# Select composite pixels based on maximum NDVI values
-ndvi_max = ndvi.max(dim='time')
-composite = ds_scaled.sel(time=ndvi.argmax(dim='time'))
-
-# Add NDVI to the composite
-composite['NDVI'] = ndvi_max
-
-# Compute the result (this triggers the actual computation)
-composite_result = composite.compute()
 
 
 
@@ -659,9 +741,10 @@ composite_result = composite.compute()
 # 
 #############################################################################################################
 def period_mosaic(inParams):
+
   mosaic_start = time.time()
   #==========================================================================================================
-  # Obtain required parameters
+  # Prepare required parameters
   #==========================================================================================================
   params = eoPM.get_mosaic_params(inParams)
   
@@ -677,146 +760,82 @@ def period_mosaic(inParams):
   StartStr, EndStr = eoPM.get_time_window(params)  
 
   #==========================================================================================================
-  # Create a base image that has full spatial dimensions of the specified region
+  # Create a base image that has full dimensions covering a specified spatial region
+  # From this base image, the spatial dimensions can be obtained.
   #==========================================================================================================
-  base_start = time.time()
-  base_img = get_base_Image(SsrData, Region, ProjStr, Scale, StartStr, EndStr)*0
+  base_img, used_time = get_base_Image(SsrData, Region, ProjStr, Scale, StartStr, EndStr)
   
-  base_img[eoIM.pix_score] = base_img[SsrData['BLU']]
-
-  # Mask out all the pixels in each variable of "base_img", so they will treated as gap/missing pixels
-  base_img = base_img.where(base_img > 0)
-  base_stop = time.time()
-
-  base_time = (base_stop - base_start)/60
-  print('\n<<<<<<<<<< Complete generating base image, elapsed time = %6.2f minutes>>>>>>>>>'%(base_time))
-  print('\n<period_mosaic> based mosaic image = ', base_img)
+  print('\n<<<<<<<<<< Complete generating base image, elapsed time = %6.2f minutes>>>>>>>>>'%(used_time))  
   
   #==========================================================================================================
-  # Create individual sub-mosaic and combine it into base image based on score
+  # Determine if the final mosaic image is generated as a whole directly or by merging a number of submosaics
   #==========================================================================================================
   nSub = get_sub_numb(base_img)
   print('<period_mosaic> The number of sub mosaics = ', nSub)
-
-  sub_regions = eoUs.divide_region(Region, nSub)
-  print('<period_mosaic> Divided sub-regions = ', sub_regions)
-  count = 1
-
-  for sub_region in sub_regions:
-    sub_mosaic_start = time.time()
-    print('\n\n<period_mosaic> Create a sub-mosaic for ', sub_region)
-    sub_polygon = {'type': 'Polygon',  'coordinates': [sub_region] }
-
-    sub_mosaic = get_sub_mosaic(SsrData, sub_polygon, ProjStr, Scale, StartStr, EndStr)
-    
-    #sub_mosaic = attach_score(sub_mosaic)
-    max_spec_val = xr.apply_ufunc(np.maximum, sub_mosaic[SsrData['BLU']], sub_mosaic[SsrData['NIR']])
-    sub_mosaic = sub_mosaic.where(max_spec_val > 0)    
-
-    # Fill the gaps/missing pixels in "base_img" with valid pixels in "sub_mosaic" 
-    base_img = base_img.combine_first(sub_mosaic)
-    sub_mosaic_stop = time.time()
-    
-    sub_mosaic_time = (sub_mosaic_stop - sub_mosaic_start)/60
-    print('\n<<<<<<<<<< Complete %2dth sub mosaic, elapsed time = %6.2f minutes>>>>>>>>>'%(count, sub_mosaic_time))
-    count += 1
   
+  if nSub == 1:
+    # The final mosaic is generated as a whole directly 
+    # This option does not work!!! will get error message "APIError: {"message": "Internal server error"}"
+    mosaic = get_sub_mosaic(SsrData, Region, ProjStr, Scale, StartStr, EndStr)
+  else:
+    #--------------------------------------------------------------------------------------------------------
+    # Create the final mosaic by merging a number of submosaics
+    #--------------------------------------------------------------------------------------------------------
+    base_img = base_img*0  
+    base_img[eoIM.pix_score] = base_img[SsrData['BLU']]
+
+    # Mask out all the pixels in each variable of "base_img", so they will treated as gap/missing pixels
+    base_img = base_img.where(base_img > 0)
+    print('\n<period_mosaic> based mosaic image = ', base_img)
+
+    sub_regions = eoUs.divide_region(Region, nSub)
+    print('<period_mosaic> Divided sub-regions = ', sub_regions)
+    count = 1
+
+    for sub_region in sub_regions:
+      sub_mosaic_start = time.time()
+      print('\n\n<period_mosaic> Create a sub-mosaic for ', sub_region)
+      sub_polygon = {'type': 'Polygon',  'coordinates': [sub_region] }
+
+      sub_mosaic = get_sub_mosaic(SsrData, sub_polygon, ProjStr, Scale, StartStr, EndStr)
+    
+      #sub_mosaic = attach_score(sub_mosaic)
+      max_spec_val = xr.apply_ufunc(np.maximum, sub_mosaic[SsrData['BLU']], sub_mosaic[SsrData['NIR']])
+      sub_mosaic = sub_mosaic.where(max_spec_val > 0)    
+
+      # Fill the gaps/missing pixels in "base_img" with valid pixels in "sub_mosaic" 
+      base_img = base_img.combine_first(sub_mosaic)
+      sub_mosaic_stop = time.time()
+    
+      sub_mosaic_time = (sub_mosaic_stop - sub_mosaic_start)/60
+      print('\n<<<<<<<<<< Complete %2dth sub mosaic, elapsed time = %6.2f minutes>>>>>>>>>'%(count, sub_mosaic_time))
+      count += 1
+    
+    mosaic = base_img
+
   mosaic_stop = time.time()
   mosaic_time = (mosaic_stop - mosaic_start)/60
   print('\n\n<<<<<<<<<< The total elapsed time for generating the mosaic = % 6.2f minutes>>>>>>>>>'%(mosaic_time))
   
-  return base_img
+  return mosaic
   
 
 
 
 
 #############################################################################################################
-# Description: This function returns a mosaic using the image acquired during 
-#
-# Revision history:  2024-May-24  Lixin Sun  Initial creation
-# 
-#############################################################################################################
-def new_period_mosaic(inParams):
-  mosaic_start = time.time()
-  #==========================================================================================================
-  # Obtain required parameters
-  #==========================================================================================================
-  params = eoPM.get_mosaic_params(inParams)
-  
-  if params == None:
-    print('<period_mosaic> Cannot create a mosaic image due to invalid input parameter!')
-    return None
-  
-  SsrData = eoIM.SSR_META_DICT[str(params['sensor']).upper()]
-  ProjStr = str(params['projection'])  
-  Scale   = int(params['resolution'])
-
-  Region  = eoPM.get_spatial_region(params)
-  StartStr, EndStr = eoPM.get_time_window(params)  
-
-  #==========================================================================================================
-  # Create a base image that has full spatial dimensions of the specified region
-  #==========================================================================================================
-  base_start = time.time()
-  base_img = get_base_Image(SsrData, Region, ProjStr, Scale, StartStr, EndStr)*0
-  
-  base_img[eoIM.pix_score] = base_img[SsrData['BLU']]
-
-  # Mask out all the pixels in each variable of "base_img", so they will treated as gap/missing pixels
-  base_img = base_img.where(base_img > 0)
-  base_stop = time.time()
-
-  base_time = (base_stop - base_start)/60
-  print('\n<<<<<<<<<< Complete generating base image, elapsed time = %6.2f minutes>>>>>>>>>'%(base_time))
-  print('\n<period_mosaic> based mosaic image = ', base_img)
-  
-  #==========================================================================================================
-  # Create individual sub-mosaic and combine it into base image based on score
-  #==========================================================================================================
-  nSub = get_sub_numb(base_img)
-  print('<period_mosaic> The number of sub mosaics = ', nSub)
-
-  sub_regions = eoUs.divide_region(Region, nSub)
-  print('<period_mosaic> Divided sub-regions = ', sub_regions)
-  count = 1
-
-  for sub_region in sub_regions:
-    sub_mosaic_start = time.time()
-    print('\n\n<period_mosaic> Create a sub-mosaic for ', sub_region)
-    sub_polygon = {'type': 'Polygon',  'coordinates': [sub_region] }
-
-    sub_mosaic = get_sub_mosaic(SsrData, sub_polygon, ProjStr, Scale, StartStr, EndStr)
-    
-    #sub_mosaic = attach_score(sub_mosaic)
-    max_spec_val = xr.apply_ufunc(np.maximum, sub_mosaic[SsrData['BLU']], sub_mosaic[SsrData['NIR']])
-    sub_mosaic = sub_mosaic.where(max_spec_val > 0)    
-
-    # Fill the gaps/missing pixels in "base_img" with valid pixels in "sub_mosaic" 
-    base_img = base_img.combine_first(sub_mosaic)
-    sub_mosaic_stop = time.time()
-    
-    sub_mosaic_time = (sub_mosaic_stop - sub_mosaic_start)/60
-    print('\n<<<<<<<<<< Complete %2dth sub mosaic, elapsed time = %6.2f minutes>>>>>>>>>'%(count, sub_mosaic_time))
-    count += 1
-  
-  mosaic_stop = time.time()
-  mosaic_time = (mosaic_stop - mosaic_start)/60
-  print('\n\n<<<<<<<<<< The total elapsed time for generating the mosaic = % 6.2f minutes>>>>>>>>>'%(mosaic_time))
-  
-  return base_img
-
-
-
-
-
-#############################################################################################################
-# Description: This function exports the band images in a mosaic to separate GeoTiff files
+# Description: This function exports the band images of a mosaic into separate GeoTiff files
 #
 # Revision history:  2024-May-24  Lixin Sun  Initial creation
 # 
 #############################################################################################################
 def export_mosaic(inParams, inMosaic):
+  '''
+    This function exports the band images of a mosaic into separate GeoTiff files.
+
+    Args:
+      inParams(dictionary): A dictionary containing all required execution parameters;
+      inMosaic(xrDS): A xarray dataset object containing mosaic images to be exported.'''
   #==========================================================================================================
   # Get all the parameters for exporting composite images
   #==========================================================================================================
@@ -828,6 +847,7 @@ def export_mosaic(inParams, inMosaic):
   #==========================================================================================================
   mosaic_int = (inMosaic * 100.0).astype(np.int16)
   rio_mosaic = mosaic_int.rio.write_crs(params['projection'], inplace=True)  # Assuming WGS84 for this example
+
   #==========================================================================================================
   # Create a directory to store the output files
   #==========================================================================================================
