@@ -101,6 +101,7 @@ def display_meta_assets(stac_items):
   print("Bounding Box:", first_item.bbox)
   print("Datetime:", first_item.datetime)
   print("Properties:")
+
   for key, value in first_item.properties.items():
     print(f"  <{key}>: {value}")
 
@@ -371,7 +372,7 @@ def get_score_refers(ready_IC):
 # Revision history:  2024-May-24  Lixin Sun  Initial creation
 # 
 #############################################################################################################
-def attach_score(SsrData, ready_IC, StartStr, EndStr):
+def attach_score(SsrData, ready_IC, StartStr, EndStr, ExtraBandCode):
   '''Attaches a score band to each image in a xarray Dataset, which is equivalent to an image collection in GEE
   '''
   #print('<attach_score> ready IC = ', ready_IC)
@@ -381,6 +382,8 @@ def attach_score(SsrData, ready_IC, StartStr, EndStr):
   #==========================================================================================================
   # Determine central Date of a compositing period and a median image of all spectral bands
   #==========================================================================================================
+  start = time.time()
+
   midDate = datetime.strptime(eoUs.period_centre(StartStr, EndStr), "%Y-%m-%d")
 
   median     = get_score_refers(ready_IC)
@@ -409,7 +412,13 @@ def attach_score(SsrData, ready_IC, StartStr, EndStr):
     ready_IC[eoIM.pix_score][i, :,:] = spec_score * time_score 
     #ready_IC[eoIM.pix_score][i] = spec_sc * time_sc
 
-  return ready_IC
+    if ExtraBandCode == eoIM.EXTRA_ANGLE:
+       cosSZA = eoIM.attach_AngleBands(img, SsrData)
+       ready_IC['cosSZA'][i, :,:] = cosSZA
+
+  stop = time.time() 
+
+  return ready_IC, (stop - start)/60.0
 
 
 
@@ -513,9 +522,20 @@ def get_spec_score(SsrData, inImg, median_blu, median_nir):
 # Description: This function returns a mosaic image for a sub-region
 #
 # Revision history:  2024-May-24  Lixin Sun  Initial creation
-# 
+#                    2024-Jul-05  Lixin Sun  Added imaging angle bands to each item/image 
+#
 #############################################################################################################
-def get_sub_mosaic(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr):
+def get_sub_mosaic(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr, ExtraBandCode):
+  '''
+     Args:
+       SsrData(Dictionary): Some meta data on a used satellite sensor;
+       SubRegion: The polygon for defining ROI;
+       ProjStr(String): A string representing the projection of the resultant composite image;
+       Scale(float): The spatial resolution of the resultant composite image;
+       StartStr(string): A string representing the start date of compositing time window;
+       EndStr(string): A string representing the end date of compositing time window; 
+
+  '''
   start_time = time.time()
 
   # get all query conditions 
@@ -528,12 +548,21 @@ def get_sub_mosaic(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr):
 
   print(f"Found: {len(stac_items):d} Images")
   
+   # Extract the view:sun_elevation values from the metadata
+  sun_elevations = []
+  for item in stac_items:
+    if "view:sun_elevation" in item.properties:
+        sun_elevations.append(item.properties["view:sun_elevation"])
+
+  # Print the extracted sun elevation values
+  print("sun ZSA of all items", sun_elevations)
+
   #==================================================================================================
   # 
   #==================================================================================================
   xrDS = odc.stac.load(stac_items,
                        bands  = criteria['bands'],
-                       groupby='solar_day',  #For lower latitude scenses, save a lot memories
+                       #groupby='solar_day',  #For lower latitude scenses, save a lot memories
                        chunks = {'x': 1000, 'y': 1000},
                        crs    = ProjStr, 
                        #bbox   = mybbox,
@@ -545,6 +574,7 @@ def get_sub_mosaic(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr):
   with ddiag.ProgressBar():
     xrDS.load()
   
+  print('\n<get_sub_mosaic> loaded xarray dataset:\n', xrDS) 
   #==========================================================================================================
   # Attach an empty layer (with all pixels equal to ZERO) to eath temporal item (an image here) in "xrDS" 
   #==========================================================================================================
@@ -553,10 +583,8 @@ def get_sub_mosaic(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr):
   xrDS['time'] = pd.to_datetime(xrDS['time'].values)
   xrDS[eoIM.pix_date] = xr.DataArray(xrDS['time'].dt.dayofyear, dims=['time'])
   
-  #================================================================================================
-  # Define a inner function for attaching imaging geometry angle bands to a S2 image
-  #================================================================================================
-  #solar_zenith = xrDS['solar:zenith']
+ 
+
   '''
   def attach_S2_angle_bands():
     vza = Image.getNumber(SsrData['VZA'])
@@ -575,44 +603,39 @@ def get_sub_mosaic(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr):
   #==========================================================================================================
   # Apply default pixel mask to each of the images
   #==========================================================================================================
-  mask_start = time.time()
+  xrDS, mask_time = eoIM.apply_default_mask(xrDS, SsrData)
 
-  xrDS = eoIM.apply_default_mask(xrDS, SsrData)
-
-  mask_end = time.time()
-  mask_time = (mask_end - mask_start)/60
   print('\n<get_sub_mosaic> Complete applying default mask, elapsed time = %6.2f minutes'%(mask_time))  
 
   #==========================================================================================================
   # Apply gain and offset to each band in a xarray dataset
   #==========================================================================================================  
-  GO_start = time.time()
-  xrDS = eoIM.apply_gain_offset(xrDS, SsrData, 100, False)
+  xrDS, rescale_time = eoIM.apply_gain_offset(xrDS, SsrData, 100, False)
   
-  GO_end = time.time()  
-  GO_time = (GO_end - GO_start)/60
-  print('<get_sub_mosaic> Complete applying gain and offset, elapsed time = %6.2f minutes'%(GO_time))
+  print('<get_sub_mosaic> Complete applying gain and offset, elapsed time = %6.2f minutes'%(rescale_time))
 
   #==========================================================================================================
   # Note: calling "fillna" function before invaking "argmax" function is very important!!!
   #==========================================================================================================
-  xrDS = attach_score(SsrData, xrDS, StartStr, EndStr).fillna(-0.0001)
-  score_end = time.time()
+  xrDS, score_time = attach_score(SsrData, xrDS, StartStr, EndStr, eoIM.EXTRA_ANGLE)
 
-  score_time = (score_end - GO_end)/60
-  print('<get_sub_mosaic> Complete pixel scoring, elapsed time = %6.2f minutes'%(score_time))
+  print('<get_sub_mosaic> Complete pixel scoring, elapsed time = %6.2f minutes'%(score_time)) 
 
+  #================================================================================================
+  # Attach an additional bands as necessary to each image in the image collection
+  #================================================================================================
+  '''
+  extra_code = int(ExtraBandCode)
+  if extra_code == eoIM.EXTRA_ANGLE:
+    xrDS = eoIM.attach_AngleBands(xrDS, SsrData)
+  elif extra_code == eoIM.EXTRA_NDVI:
+    xrDS = eoIM.attach_NDVIBand(xrDS, SsrData)
+  '''
+
+  xrDS = xrDS.fillna(-0.0001)
   max_indices = xrDS[eoIM.pix_score].argmax(dim='time')
-  max_end  = time.time()
-
-  max_time = (max_end - score_end)/60
-  print('<get_sub_mosaic> Complete searching max indices, elapsed time = %6.2f minutes'%(max_time))
-
   sub_mosaic  = xrDS.isel(time=max_indices)
-  mosaic_end  = time.time()
 
-  mosaic_time = (mosaic_end - max_end)/60
-  print('<get_sub_mosaic> Complete creating a sub mosaic, elapsed time = %6.2f minutes'%(mosaic_time))
   print('\n\n<get_sub_mosaic> sub mosaic =', sub_mosaic)
 
   return sub_mosaic    #.compute()
@@ -708,23 +731,16 @@ def new_get_sub_mosaic(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr):
   #==========================================================================================================
   # Note: calling "fillna" function before invaking "argmax" function is very important!!!
   #==========================================================================================================
-  full_IC = attach_score(SsrData, full_IC, StartStr, EndStr).fillna(-0.0001)
-  score_end = time.time()
+  full_IC, score_time = attach_score(SsrData, full_IC, StartStr, EndStr).fillna(-0.0001)
 
-  score_time = (score_end - GO_end)/60
   print('<get_sub_mosaic> Complete pixel scoring, elapsed time = %6.2f minutes'%(score_time))
 
   max_indices = full_IC[eoIM.pix_score].argmax(dim='time')
-  max_end  = time.time()
 
-  max_time = (max_end - score_end)/60
   print('<get_sub_mosaic> Complete searching max indices, elapsed time = %6.2f minutes'%(max_time))
 
   sub_mosaic  = full_IC.isel(time=max_indices)
-  mosaic_end  = time.time()
 
-  mosaic_time = (mosaic_end - max_end)/60
-  print('<get_sub_mosaic> Complete creating a sub mosaic, elapsed time = %6.2f minutes'%(mosaic_time))
   print('\n\n<get_sub_mosaic> sub mosaic =', sub_mosaic)
 
   return sub_mosaic    #.compute()
@@ -783,6 +799,7 @@ def period_mosaic(inParams):
     #--------------------------------------------------------------------------------------------------------
     base_img = base_img*0  
     base_img[eoIM.pix_score] = base_img[SsrData['BLU']]
+    base_img['cosSZA']       = base_img[SsrData['BLU']]
 
     # Mask out all the pixels in each variable of "base_img", so they will treated as gap/missing pixels
     base_img = base_img.where(base_img > 0)
@@ -797,7 +814,7 @@ def period_mosaic(inParams):
       print('\n\n<period_mosaic> Create a sub-mosaic for ', sub_region)
       sub_polygon = {'type': 'Polygon',  'coordinates': [sub_region] }
 
-      sub_mosaic = get_sub_mosaic(SsrData, sub_polygon, ProjStr, Scale, StartStr, EndStr)
+      sub_mosaic = get_sub_mosaic(SsrData, sub_polygon, ProjStr, Scale, StartStr, EndStr, eoIM.EXTRA_ANGLE)
     
       #sub_mosaic = attach_score(sub_mosaic)
       max_spec_val = xr.apply_ufunc(np.maximum, sub_mosaic[SsrData['BLU']], sub_mosaic[SsrData['NIR']])
@@ -881,30 +898,27 @@ def export_mosaic(inParams, inMosaic):
 
 
 
+'''
+params = {
+    'sensor': 'S2_SR',           # A sensor type string (e.g., 'S2_SR' or 'L8_SR' or 'MOD_SR')
+    'unit': 2,                   # A data unit code (1 or 2 for TOA or surface reflectance)    
+    'year': 2021,                # An integer representing image acquisition year
+    'nbYears': -1,               # positive int for annual product, or negative int for monthly product
+    'months': [8],               # A list of integers represening one or multiple monthes     
+    'tile_names': ['tile55_411'], # A list of (sub-)tile names (defined using CCRS' tile griding system) 
+    'prod_names': ['mosaic'],    #['mosaic', 'LAI', 'fCOVER', ]    
+    'resolution': 200,            # Exporting spatial resolution    
+    'out_folder': 'C:/Work_documents/test_xr_tile55_411_2021_200m',  # the folder name for exporting
+    'projection': 'EPSG:3979'   
+    
+    #'start_date': '2022-06-15',
+    #'end_date': '2022-09-15'
+}
 
-
-# params = {
-#     'sensor': 'L8_SR',           # A sensor type string (e.g., 'S2_SR' or 'L8_SR' or 'MOD_SR')
-#     'unit': 2,                   # A data unit code (1 or 2 for TOA or surface reflectance)    
-#     'year': 2022,                # An integer representing image acquisition year
-#     'nbYears': 1,                # positive int for annual product, or negative int for monthly product
-#     'months': [8],               # A list of integers represening one or multiple monthes     
-#     'tile_names': ['tile42_922'],   # A list of (sub-)tile names (defined using CCRS' tile griding system) 
-#     'prod_names': ['mosaic'],    #['mosaic', 'LAI', 'fCOVER', ]    
-#     'resolution': 1000,          # Exporting spatial resolution    
-#     'out_folder': 'C:/Work_documents/test_xr_output',   # the folder name for exporting   
-#     'CloudScore': True,
-#     'current_month': 8,
-#     'current_tile': 'tile42_922',
-
-#     #'start_date': '2022-06-15',
-#     #'end_date': '2023-09-15'
-# }
-
-# mosaic = period_mosaic(params)
+mosaic = period_mosaic(params)
 
 # export_mosaic(params, mosaic)
-
+'''
 
 
 

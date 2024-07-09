@@ -1,9 +1,9 @@
-import eoImage as Img
+import pvlib
 import calendar
 from datetime import datetime, timedelta
 
 
-
+import eoImage as Img
 
 
 ######################################################################################################
@@ -337,6 +337,31 @@ def divide_bbox(inBbox, nDivides):
       sub_regions.append(sub_region)
   
   return sub_regions
+
+
+
+
+
+
+
+#############################################################################################################
+# Description: This function returns sun zenith and azimuth angles corresponding to given cases testing code
+# Note:        date = pd.Timestamp('2023-06-21 12:00:00', tz='UTC')  # Example date and time in UTC
+#
+# Revision history:  2024-Jul-09  Lixin Sun  Initial creation
+#############################################################################################################
+def get_sun_angles(Date, Lat, Lon):
+    # Define the location
+    location = pvlib.location.Location(Lat, Lon)
+
+    # Calculate solar position
+    solar_position = location.get_solarposition(times=Date)
+
+    # Extract sun zenith and azimuth angles
+    sza = solar_position['zenith'].values
+    saa = solar_position['azimuth'].values
+
+    return sza, saa
 
 
 

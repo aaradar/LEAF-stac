@@ -1,6 +1,7 @@
 
 import math
 import numpy as np
+import time
 import datetime
 
 import xarray as xr
@@ -473,6 +474,8 @@ def apply_gain_offset(xrDS, SsrData, MaxRef, all_bands):
        MaxREF: The maximum reflectance value (1 or 100);
        all_bands(Boolean): A flag indicating if apply gain and offset to all bands or not.''' 
   
+  start = time.time()
+
   #================================================================================================
   # Apply gain and offset
   #================================================================================================
@@ -491,7 +494,9 @@ def apply_gain_offset(xrDS, SsrData, MaxRef, all_bands):
   # Replace negative and small pixels values with 0.01
   #================================================================================================
   #min_val = 0.001
-  return xrDS   #.where(xrDS > min_val, min_val)
+  stop = time.time()
+
+  return xrDS, (stop - start)/60.0
 
 
 
@@ -510,16 +515,22 @@ def apply_default_mask(xrDS, SsrData):
      Args:        
        xrDS(xrDataset): A given xarray dataset object to which default mask will be applied  
        SsrData(Dictionary): A Dictionary containing metadata associated with a sensor and data unit.''' 
-  
+  start = time.time()
+
   ssr_code = SsrData['SSR_CODE']
 
   if ssr_code > MAX_LS_CODE and ssr_code < 25:  # For Sentinel-2 
     scl = xrDS['scl']
     # The pixels with SCL = 0 must be masked out
-    return xrDS.where((scl == 2) | ((scl > 3) & (scl < 8)) | (scl == 10))
+
+    stop = time.time()
+
+    return xrDS.where((scl == 2) | ((scl > 3) & (scl < 8)) | (scl == 10)), (stop-start)/60.0
   
   else:    
-    return xrDS
+    stop = time.time()
+    return xrDS, (stop-start)/60.0
+  
 
 
 
@@ -578,34 +589,20 @@ def attach_Date(xrItem):
 def attach_AngleBands(xrDS, SsrData):
   '''Attaches three angle bands to a satallite SURFACE REFLECTANCE image
   Args:    
-    xrDS(xr Dateset): A xarray dataset object (an image);
+    xrDS(xr Dateset): A xarray dataset object (a single image);
     SsrData(Dictionary): A Dictionary containing metadata associated with a sensor and data unit.'''  
-  
-  rad = math.pi/180.0
-  
-  sza = xrDS.to_dict()['properties'][SsrData['SZA']]
-  print('<attach_AngleBands> sza = ', sza)
 
   #================================================================================================
   # Define a inner function for attaching imaging geometry angle bands to a LS or HLS image
   #================================================================================================ 
-  def attach_angle_bands():
-    sza_rad = (90 - xrDS.properties.get(SsrData['SZA'])) * rad
-    vza_rad = xrDS.properties.get(SsrData['SZA']) * rad
-    saa     = xrDS.properties.get(SsrData['SAA']) 
-    vaa     = xrDS.properties.get(SsrData['VAA'])    
-    raa_rad = (saa - vaa) * rad
-
-    xrDS['cosVZA'] = vza_rad.cos()
-    xrDS['cosSZA'] = sza_rad.cos()
-    xrDS['cosRAA'] = raa_rad.cos()
-
-    return xrDS  
+  sza     = 90.0 - xrDS.properties[SsrData['SZA']]
+  sza_rad = np.deg2rad(sza)
+  cosSZA  = np.cos(sza_rad)
   
-  #ssr_code = SsrData['SSR_CODE']
-  #condition = ssr_code < MAX_LS_CODE | ssr_code == HLS_sensor
+  #xrDS['cosVZA'] = vza_rad.cos()
+  #xrDS['cosRAA'] = raa_rad.cos()
 
-  return attach_angle_bands()
+  return cosSZA
 
 
 
