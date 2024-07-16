@@ -115,13 +115,13 @@ def display_meta_assets(stac_items):
 # Revision history:  2024-Jul-02  Lixin Sun  Initial creation
 # 
 #############################################################################################################
-def get_sub_numb(xrDS):
+def get_sub_numb(xrDS, sub_size):
   x_dim = xrDS.sizes['x']
   y_dim = xrDS.sizes['y']
 
   max_dim = max(x_dim, y_dim)
 
-  nSub = int((max_dim/5000.0) + 0.5)
+  nSub = int((max_dim/sub_size) + 0.5)
 
   return nSub if nSub > 1 else 2
 
@@ -928,7 +928,7 @@ def period_mosaic(inParams, DB_fullpath = ''):
   #==========================================================================================================
   # Determine if the final mosaic image is generated as a whole directly or by merging a number of submosaics
   #==========================================================================================================
-  nSub = get_sub_numb(base_img)
+  nSub = get_sub_numb(base_img, 1000)
   print('<period_mosaic> The number of sub mosaics = ', nSub)
   extra_bands = eoIM.EXTRA_NONE
 
@@ -1045,7 +1045,6 @@ def export_mosaic(inParams, inMosaic):
     output_path = os.path.join(dir_path, filename)
     rio_mosaic.to_netcdf(output_path)
 
-
 '''
 params = {
     'sensor': 'S2_SR',           # A sensor type string (e.g., 'S2_SR' or 'L8_SR' or 'MOD_SR')
@@ -1063,7 +1062,7 @@ params = {
     #'end_date': '2022-09-15'
 }
 
-mosaic = period_mosaic(params, 'C:\\Work_documents\\scene_geo_angles\\test_angle.csv')
+mosaic = period_mosaic(params, 'C:\\Work_documents\\scene_geo_angles\\tile42_geo_angles_2022_Summer.csv')
 
 # export_mosaic(params, mosaic)
 '''

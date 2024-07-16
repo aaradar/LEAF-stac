@@ -1,4 +1,4 @@
-import pvlib
+#import pvlib
 import calendar
 from datetime import datetime, timedelta
 
@@ -350,6 +350,7 @@ def divide_bbox(inBbox, nDivides):
 #
 # Revision history:  2024-Jul-09  Lixin Sun  Initial creation
 #############################################################################################################
+'''
 def get_sun_angles(Date, Lat, Lon):
     # Define the location
     location = pvlib.location.Location(Lat, Lon)
@@ -362,7 +363,7 @@ def get_sun_angles(Date, Lat, Lon):
     saa = solar_position['azimuth'].values
 
     return sza, saa
-
+'''
 
 
 
