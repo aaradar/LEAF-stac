@@ -13,6 +13,8 @@ import dask.diagnostics as ddiag
 import dask
 
 
+from collections import defaultdict
+
 # certificate_path = "C:/Users/lsun/nrcan_azure_amazon.cer"
 # if os.path.exists(certificate_path):
 #   stac_api_io = psc.stac_api_io.StacApiIO()
@@ -183,15 +185,49 @@ def get_query_conditions(SsrData, StartStr, EndStr):
 
 
 
+#############################################################################################################
+# Description: This function reads and returns a geometry angle database from a local .CSV file, which was
+#              created using GEE (in ImgSet.py)
+#
+# Revision history:  2024-Jul-15  Lixin Sun  Initial creation
+# 
+#############################################################################################################
+def read_angleDB(DB_fullpath):
+  if os.path.isfile(DB_fullpath) == False:
+    return None
+  
+  def form_key(product_ID):
+    #PRODUCT_ID: S2B_MSIL2A_20200801T182919_N0214_R027_T12VWK_20200801T223038
+    tokens = str(product_ID).split('_')
+    return tokens[0] + '_' + tokens[5][1:] + '_' + tokens[2][:8] + '_' + tokens[1][3:]
+
+  angle_DB = pd.read_csv(DB_fullpath)
+  ID_col_name = angle_DB.columns[0]
+  ID_column = angle_DB.loc[:, ID_col_name]
+
+  new_IDs = []
+  for id in ID_column:
+    new_IDs.append(form_key(id))
+  
+  angle_DB[ID_col_name] = new_IDs
+  
+  return angle_DB
+  #print(angle_DB.head())
+
 
 #############################################################################################################
 # Description: This function returns the results of searching a STAC catalog
 #
 # Revision history:  2024-May-24  Lixin Sun  Initial creation
-# 
+#                    2024-Jul-12  Lixin Sun  Added a filter to retain only one image from the items with
+#                                            identical timestamps.
+#
 #############################################################################################################
-def search_STAC_Catalog(Region, Criteria, MaxImgs, based_on_region = True):
-
+def search_STAC_Catalog(Region, Criteria, MaxImgs, AngleDB, based_on_region = True):
+  '''
+    Args:
+      AngleDB(pd.Dataframe): A dataframe containing the imaging angles of all candidate scenes;
+  '''
   # use publically available stac 
   catalog = psc.client.Client.open(str(Criteria['catalog'])) 
 
@@ -206,8 +242,6 @@ def search_STAC_Catalog(Region, Criteria, MaxImgs, based_on_region = True):
                                   query       = Criteria['filters'],
                                   limit       = MaxImgs)
         
-    return list(stac_catalog.items())
-    
   else:
     Bbox = eoUs.get_region_bbox(Region)
     print('<search_STAC_Images> The bbox of the given region = ', Bbox)
@@ -217,9 +251,107 @@ def search_STAC_Catalog(Region, Criteria, MaxImgs, based_on_region = True):
                                    datetime    = str(Criteria['timeframe']), 
                                    query       = Criteria['filters'],
                                    limit       = MaxImgs)
-    
-    return list(stac_catalog.items())
+  
+  stac_items = list(stac_catalog.items())
+  
+  #==================================================================================================
+  # Retain only one image from the items with identical timestamps
+  #==================================================================================================     
+  # Create a dictionary to store items by their timestamp
+  items_by_id = defaultdict(list)
 
+  # Create a new dictionary with the core image ID as keys
+  for item in stac_items:
+    #id = str(item.id)[0:19]      #core image ID
+    tokens = str(item.id).split('_')   #core image ID
+    id = tokens[0] + '_' + tokens[1] + '_' + tokens[2]
+    items_by_id[id].append(item)
+  
+  # Iterate through the grouped items and keep only one item per timestamp
+  unique_items = []
+  for id, item_group in items_by_id.items():
+    # Assuming we keep the first item in each group
+    unique_items.append(item_group[0])
+
+  AngleDB = pd.DataFrame(AngleDB)  
+  if AngleDB.empty == True:
+    return unique_items
+
+  #==================================================================================================
+  # If an imaging angle database has been provided, then the searched items need to be further 
+  # filtered based on the angle database   
+  #==================================================================================================
+  filtered_items = []
+  id_name = AngleDB.columns[0]
+  DB_keys = AngleDB[id_name].values
+  for item in unique_items:
+    tokens   = str(item.id).split('_')   #core image ID
+    scene_id = tokens[0] + '_' + tokens[1] + '_' + tokens[2] + '_' + tokens[4]
+
+    if scene_id in DB_keys: #AngleDB[id_name].values:
+      DB_index = AngleDB.loc[AngleDB[id_name] == scene_id].index
+      row_dict = AngleDB.loc[DB_index].to_dict()
+      sub_key = list(row_dict['sza'].keys())[0]
+      #print(f'{sub_key}')
+
+      item.properties['sza'] = row_dict['sza'][sub_key]
+      item.properties['saa'] = row_dict['saa'][sub_key]
+      item.properties['vza'] = row_dict['vza'][sub_key]
+      item.properties['vaa'] = row_dict['vaa'][sub_key]
+      
+      filtered_items.append(item)
+      #print(item.Datetime)
+
+  return filtered_items
+    
+
+
+
+#############################################################################################################
+# Description: This function returns a list of IDs for the scenes to be obtained from a STAC catalog
+#
+# Revision history:  2024-Jul-09  Lixin Sun  Initial creation
+# 
+#############################################################################################################
+def extract_scene_IDs(STACItems, SsrData):    
+  scene_IDs   = {}
+  series_code = 1
+  for item in STACItems:
+    scene_IDs[str(item.id)] = [series_code, item.datetime]
+    print(f"{str(item.id)}: {series_code} {item.datetime}")
+    series_code += 1    
+
+  #print("<extract_scene_IDs> All scene IDs = ", scene_IDs)
+  return scene_IDs
+
+
+
+
+#############################################################################################################
+# Description: This function returns a list of IDs for the scenes to be obtained from a STAC catalog
+#
+# Revision history:  2024-Jul-09  Lixin Sun  Initial creation
+# 
+#############################################################################################################
+def get_sub_scene_IDs(AllSceneIDs, SubItems, SsrData):
+  '''
+    Args:
+      AllSceneIDs(dictionary): A dictionary containing IDs and their series numbers for the scenes covering an entire ROI;
+      SubItems(list): A list of scene items searched for a sub-ROI;
+      SsrData(dictionary): A dictionary containing metadata for a specific sensor.'''
+
+  allIDs = AllSceneIDs.keys()
+  
+  print('\n\n<<<<<<<<<<<<<<<<<<<<<<<< Meta info for sub mosaic >>>>>>>>>>>>>>>>>>>>>\n')
+  sub_scene_IDs = {}
+  for sub_i in SubItems:
+    sub_ID = str(sub_i.id)
+    for ID in allIDs:
+      if sub_ID == ID:
+        sub_scene_IDs[sub_ID] = AllSceneIDs[ID]
+        print(f"{sub_ID}: {AllSceneIDs[ID][0]} and {AllSceneIDs[ID][1]}")
+
+  return sub_scene_IDs
 
 
 
@@ -233,34 +365,38 @@ def search_STAC_Catalog(Region, Criteria, MaxImgs, based_on_region = True):
 def get_base_Image(SsrData, Region, ProjStr, Scale, StartStr, EndStr):
   start_time = time.time()
 
-  # get all query conditions 
-  criteria = get_query_conditions(SsrData, StartStr, EndStr)
-
-  stac_items = search_STAC_Catalog(Region, criteria, 5, True)
+  #==================================================================================================
+  # Obtain query criteria, and then search a specified STAC catalog
+  #==================================================================================================
+  criteria   = get_query_conditions(SsrData, StartStr, EndStr)
+  stac_items = search_STAC_Catalog(Region, criteria, 5, None, True)
 
   print(f"Found: {len(stac_items):d} datasets")
   display_meta_assets(stac_items)
   
   #==================================================================================================
-  # define a geobox for my region
+  # Load the first image based on the boundary box of ROI
   #==================================================================================================
-  # lazily combine items
   Bbox = eoUs.get_region_bbox(Region)
   print('<get_base_Image> The bbox of the given region = ', Bbox)
 
-  ds_xr = odc.stac.load(stac_items[0:2],
+  ds_xr = odc.stac.load([stac_items[0]],
                         bands  = criteria['bands'],
-                        groupby='solar_day',  
                         chunks = {'x': 1000, 'y': 1000},
                         crs    = ProjStr, 
                         bbox   = Bbox,
                         fail_on_error = False,
                         resolution = Scale)
   
-  # actually load all data into memory
+  # actually load data into memory
   with ddiag.ProgressBar():
     ds_xr.load()
-  
+
+  #==================================================================================================
+  # Extract 
+  #==================================================================================================
+  #all_scene_IDs = extract_scene_IDs(stac_items, SsrData)
+
   stop_time = time.time() 
   
   return ds_xr.isel(time=0), (stop_time - start_time)/60
@@ -412,9 +548,8 @@ def attach_score(SsrData, ready_IC, StartStr, EndStr, ExtraBandCode):
     ready_IC[eoIM.pix_score][i, :,:] = spec_score * time_score 
     #ready_IC[eoIM.pix_score][i] = spec_sc * time_sc
 
-    if ExtraBandCode == eoIM.EXTRA_ANGLE:
-       cosSZA = eoIM.attach_AngleBands(img, SsrData)
-       ready_IC['cosSZA'][i, :,:] = cosSZA
+    #if ExtraBandCode == eoIM.EXTRA_ANGLE:       
+    #  ready_IC['cosSZA'][i, :,:] = 
 
   stop = time.time() 
 
@@ -525,7 +660,7 @@ def get_spec_score(SsrData, inImg, median_blu, median_nir):
 #                    2024-Jul-05  Lixin Sun  Added imaging angle bands to each item/image 
 #
 #############################################################################################################
-def get_sub_mosaic(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr, ExtraBandCode):
+def get_sub_mosaic(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr, AngleDB, ExtraBandCode):
   '''
      Args:
        SsrData(Dictionary): Some meta data on a used satellite sensor;
@@ -534,32 +669,22 @@ def get_sub_mosaic(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr, ExtraBa
        Scale(float): The spatial resolution of the resultant composite image;
        StartStr(string): A string representing the start date of compositing time window;
        EndStr(string): A string representing the end date of compositing time window; 
-
-  '''
+       AngleDB(pd.DataFrame): A dataframe containing imaging angle of all candidate image scenes;
+       ExtraBandCode(Int): An integer indicating if to attach extra bands to mosaic image.'''
+  
   start_time = time.time()
 
-  # get all query conditions 
-  criteria = get_query_conditions(SsrData, StartStr, EndStr)
-
   #==========================================================================================================
-  # Obtain all images from a STAC catalog
+  # Obtain query conditions, and then search a specified STAC catalog
   #========================================================================================================== 
-  stac_items = search_STAC_Catalog(SubRegion, criteria, 500, False)
+  criteria   = get_query_conditions(SsrData, StartStr, EndStr)
+  stac_items = search_STAC_Catalog(SubRegion, criteria, 500, AngleDB, False)
 
-  print(f"Found: {len(stac_items):d} Images")
+  print(f"<get_sub_mosaic> Found: {len(stac_items):d} images for submosaic.")
   
-   # Extract the view:sun_elevation values from the metadata
-  sun_elevations = []
-  for item in stac_items:
-    if "view:sun_elevation" in item.properties:
-        sun_elevations.append(item.properties["view:sun_elevation"])
-
-  # Print the extracted sun elevation values
-  print("sun ZSA of all items", sun_elevations)
-
-  #==================================================================================================
+  #==========================================================================================================
   # 
-  #==================================================================================================
+  #==========================================================================================================
   xrDS = odc.stac.load(stac_items,
                        bands  = criteria['bands'],
                        #groupby='solar_day',  #For lower latitude scenses, save a lot memories
@@ -568,6 +693,10 @@ def get_sub_mosaic(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr, ExtraBa
                        #bbox   = mybbox,
                        resolution = Scale)
   
+  print("\n<get_sub_mosaic> Timestamps in stac_items:")  
+  for item in stac_items:
+    print(item.datetime)
+
   #==========================================================================================================
   # Actually load all data from a lazy-loaded dataset into in-memory Numpy arrays
   #==========================================================================================================
@@ -575,6 +704,12 @@ def get_sub_mosaic(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr, ExtraBa
     xrDS.load()
   
   print('\n<get_sub_mosaic> loaded xarray dataset:\n', xrDS) 
+
+  time_values = xrDS.coords['time'].values
+  print("\n<get_sub_mosaic> Time Dimension Values:")
+  for t in time_values:
+    print(t)
+
   #==========================================================================================================
   # Attach an empty layer (with all pixels equal to ZERO) to eath temporal item (an image here) in "xrDS" 
   #==========================================================================================================
@@ -582,8 +717,7 @@ def get_sub_mosaic(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr, ExtraBa
   
   xrDS['time'] = pd.to_datetime(xrDS['time'].values)
   xrDS[eoIM.pix_date] = xr.DataArray(xrDS['time'].dt.dayofyear, dims=['time'])
-  
- 
+  xrDS['time_index']  = xr.DataArray(range(0, len(time_values)), dims=['time'])
 
   '''
   def attach_S2_angle_bands():
@@ -660,7 +794,7 @@ def new_get_sub_mosaic(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr):
   #==========================================================================================================
   # Obtain all images from a STAC catalog
   #========================================================================================================== 
-  stac_catalog = search_STAC_Catalog(SubRegion, criteria, 500, False)
+  stac_catalog = search_STAC_Catalog(SubRegion, criteria, 500, None, False)
 
   stac_items = list(stac_catalog.items())
   print(f"Found: {len(stac_items):d} datasets")
@@ -752,12 +886,20 @@ def new_get_sub_mosaic(SsrData, SubRegion, ProjStr, Scale, StartStr, EndStr):
 
 #############################################################################################################
 # Description: This function returns a mosaic using the image acquired during 
+# 
+# Note: If "DB_fullpath" parameter is provided, then it indicates that imaging angles need to be included in
+#       composite image.
 #
 # Revision history:  2024-May-24  Lixin Sun  Initial creation
-# 
+#                    2024-Jul-15  Lixin Sun  Added the 2nd input parameter (DB_fullpath), which indicates
+#                                            if imaging angles need to be included in composite image.
 #############################################################################################################
-def period_mosaic(inParams):
-
+def period_mosaic(inParams, DB_fullpath = ''):
+  '''
+    Args:
+      inParams(dictionary): A dictionary containing all required parameters;
+      DB_fullpath(String): A full path to a geometry angle database file in .CSV format.'''
+  
   mosaic_start = time.time()
   #==========================================================================================================
   # Prepare required parameters
@@ -788,18 +930,25 @@ def period_mosaic(inParams):
   #==========================================================================================================
   nSub = get_sub_numb(base_img)
   print('<period_mosaic> The number of sub mosaics = ', nSub)
-  
+  extra_bands = eoIM.EXTRA_NONE
+
   if nSub == 1:
     # The final mosaic is generated as a whole directly 
     # This option does not work!!! will get error message "APIError: {"message": "Internal server error"}"
     mosaic = get_sub_mosaic(SsrData, Region, ProjStr, Scale, StartStr, EndStr)
   else:
     #--------------------------------------------------------------------------------------------------------
+    # Detect the existance of an imaging angle database
+    #--------------------------------------------------------------------------------------------------------
+    angle_DB = pd.DataFrame(read_angleDB(DB_fullpath))
+    if angle_DB.empty == False:      
+      extra_bands = eoIM.EXTRA_ANGLE
+
+    #--------------------------------------------------------------------------------------------------------
     # Create the final mosaic by merging a number of submosaics
     #--------------------------------------------------------------------------------------------------------
     base_img = base_img*0  
     base_img[eoIM.pix_score] = base_img[SsrData['BLU']]
-    base_img['cosSZA']       = base_img[SsrData['BLU']]
 
     # Mask out all the pixels in each variable of "base_img", so they will treated as gap/missing pixels
     base_img = base_img.where(base_img > 0)
@@ -814,7 +963,7 @@ def period_mosaic(inParams):
       print('\n\n<period_mosaic> Create a sub-mosaic for ', sub_region)
       sub_polygon = {'type': 'Polygon',  'coordinates': [sub_region] }
 
-      sub_mosaic = get_sub_mosaic(SsrData, sub_polygon, ProjStr, Scale, StartStr, EndStr, eoIM.EXTRA_ANGLE)
+      sub_mosaic = get_sub_mosaic(SsrData, sub_polygon, ProjStr, Scale, StartStr, EndStr, angle_DB, extra_bands)
     
       #sub_mosaic = attach_score(sub_mosaic)
       max_spec_val = xr.apply_ufunc(np.maximum, sub_mosaic[SsrData['BLU']], sub_mosaic[SsrData['NIR']])
@@ -897,15 +1046,14 @@ def export_mosaic(inParams, inMosaic):
     rio_mosaic.to_netcdf(output_path)
 
 
-
 '''
 params = {
     'sensor': 'S2_SR',           # A sensor type string (e.g., 'S2_SR' or 'L8_SR' or 'MOD_SR')
     'unit': 2,                   # A data unit code (1 or 2 for TOA or surface reflectance)    
-    'year': 2021,                # An integer representing image acquisition year
+    'year': 2022,                # An integer representing image acquisition year
     'nbYears': -1,               # positive int for annual product, or negative int for monthly product
-    'months': [8],               # A list of integers represening one or multiple monthes     
-    'tile_names': ['tile55_411'], # A list of (sub-)tile names (defined using CCRS' tile griding system) 
+    'months': [6],               # A list of integers represening one or multiple monthes     
+    'tile_names': ['tile42_411'], # A list of (sub-)tile names (defined using CCRS' tile griding system) 
     'prod_names': ['mosaic'],    #['mosaic', 'LAI', 'fCOVER', ]    
     'resolution': 200,            # Exporting spatial resolution    
     'out_folder': 'C:/Work_documents/test_xr_tile55_411_2021_200m',  # the folder name for exporting
@@ -915,7 +1063,7 @@ params = {
     #'end_date': '2022-09-15'
 }
 
-mosaic = period_mosaic(params)
+mosaic = period_mosaic(params, 'C:\\Work_documents\\scene_geo_angles\\test_angle.csv')
 
 # export_mosaic(params, mosaic)
 '''
