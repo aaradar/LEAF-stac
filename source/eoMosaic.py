@@ -585,7 +585,8 @@ def attach_score(SsrData, ready_IC, StartStr, EndStr, ExtraBandCode):
     spec_score = get_spec_score(SsrData, img, median_blu, median_nir)     
     ready_IC[eoIM.pix_score][i, :,:] = spec_score * time_score 
    
-  Parallel(n_jobs=4, require='sharedmem')(delayed(score_one_img)(i, time) for i, time in enumerate(ready_IC.time.values))  
+  Parallel(n_jobs=-1, require='sharedmem')(delayed(score_one_img)(i, time) for i, time in enumerate(ready_IC.time.values))  
+  #Parallel(n_jobs=-1)(delayed(score_one_img)(i, time) for i, time in enumerate(ready_IC.time.values))  
 
   stop = time.time() 
 
