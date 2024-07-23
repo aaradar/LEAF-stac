@@ -6,7 +6,7 @@ import datetime
 
 import xarray as xr
 import eoUtils as eoUs
-
+import eoImage as eoIM
 
 
 UNKNOWN_sensor = 0
@@ -571,6 +571,7 @@ def attach_Date(xrItem):
 
   return xrItem
   
+  
 
 
 
@@ -599,6 +600,12 @@ def attach_AngleBands(xrDS, Items):
   
   sorted_items = sorted(Items, key=get_sort_key)
  
+  for item in sorted_items:
+    eoIM.get_Img_Angles(item)
+    print(item)
+
+  #eoUs.get_average_VAs('S2A', TimeStamp, CentreLat, CentreLon, CentreAlt)
+
   cosSZAs = np.cos(np.radians([item.properties['sza'] for item in sorted_items]))
   cosVZAs = np.cos(np.radians([item.properties['vza'] for item in sorted_items]))
   cosRAAs = np.cos(np.radians([item.properties['saa'] - item.properties['vaa'] for item in sorted_items]))

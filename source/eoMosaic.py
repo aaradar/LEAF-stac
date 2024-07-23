@@ -5,6 +5,8 @@ import time
 from datetime import datetime
 import numpy as np
 import pandas as pd
+import requests
+import xml.etree.ElementTree as ET
 
 import xarray as xr
 import pystac_client as psc
@@ -90,13 +92,40 @@ def get_resolution(xr_img_coll):
 
 
 
+
+#############################################################################################################
+# Description: This function returns average view angles (VZA and VAA) for a given STAC item/scene
+#
+# Revision history:  2024-Jul-23  Lixin Sun  Initial creation
+# 
+#############################################################################################################
+def get_View_angles(StacItem):
+  assets = dict(StacItem.assets.items())
+  granule_meta = assets['granule_metadata']
+  response = requests.get(granule_meta.href)
+  response.raise_for_status()  # Check that the request was successful
+
+  # Parse the XML content
+  root = ET.fromstring(response.content)
+  
+  view_angles = {}
+  elem = root.find(".//Mean_Viewing_Incidence_Angle[@bandId='8']")
+  view_angles['vza'] = float(elem.find('ZENITH_ANGLE').text)
+  view_angles['vaa'] = float(elem.find('AZIMUTH_ANGLE').text)    
+  
+  return view_angles
+   
+
+
+
+
 def display_meta_assets(stac_items):
   first_item = stac_items[0]
 
   print('<<<<<<< The assets associated with an item >>>>>>>\n' )
   for asset_key, asset in first_item.assets.items():
     #print(f"Band: {asset_key}, Description: {asset.title or 'No title'}")
-    print(f"Asset key: {asset_key}, title: {asset.title}, href: {asset.href}")
+    print(f"Asset key: {asset_key}, title: {asset.title}, href: {asset.href}")    
 
   print('<<<<<<< The meta data associated with an item >>>>>>>\n' )
   print("ID:", first_item.id)
@@ -176,6 +205,79 @@ def get_one_tile_items(StacItems, TileName):
       tile_items.append(item)
 
   return tile_items 
+
+
+
+
+#############################################################################################################
+# Description: This function returns a list of updated STAC items by adding imaging angles (VZA, VAA, SZA
+#              and SAA) associated with each STAC item/satellite scene.
+#
+# Revision history:  2024-Jul-22  Lixin Sun  Initial creation
+#
+#############################################################################################################
+def ingest_Geo_Angles_GEE_DB(StacItems, AngleDB = None):
+  #==========================================================================================================
+  # Confirm the given item list is not empty
+  #==========================================================================================================
+  nItems = len(StacItems)
+  if nItems < 1:
+    return None
+  
+  #==========================================================================================================
+  # 
+  #==========================================================================================================
+  out_items = [] 
+  AngleDB = pd.DataFrame(AngleDB)  
+  if AngleDB.empty == False:
+    id_name = AngleDB.columns[0]
+    DB_keys = AngleDB[id_name].values
+    for item in StacItems:
+      tokens   = str(item.id).split('_')   #core image ID
+      scene_id = tokens[0] + '_' + tokens[1] + '_' + tokens[2] + '_' + tokens[4]
+
+      if scene_id in DB_keys: #AngleDB[id_name].values:
+        DB_index = AngleDB.loc[AngleDB[id_name] == scene_id].index
+        row_dict = AngleDB.loc[DB_index].to_dict()
+        sub_key = list(row_dict['sza'].keys())[0]
+        #print(f'{sub_key}')
+
+        item.properties['sza'] = row_dict['sza'][sub_key]
+        item.properties['saa'] = row_dict['saa'][sub_key]
+        item.properties['vza'] = row_dict['vza'][sub_key]
+        item.properties['vaa'] = row_dict['vaa'][sub_key]
+      
+        out_items.append(item)        
+  
+  return out_items
+
+
+
+
+def ingest_Geo_Angles(StacItems):
+  #==========================================================================================================
+  # Confirm the given item list is not empty
+  #==========================================================================================================
+  nItems = len(StacItems)
+  if nItems < 1:
+    return None
+  
+  #==========================================================================================================
+  # 
+  #==========================================================================================================
+  out_items = [] 
+  for item in StacItems:
+    view_angles = get_View_angles(item)
+    
+    item.properties['sza'] = 90.0 - item.properties['view:sun_elevation']
+    item.properties['saa'] = item.properties['view:sun_azimuth']
+    item.properties['vza'] = view_angles['vza']
+    item.properties['vaa'] = view_angles['vaa']
+
+    out_items.append(item)
+  
+  return out_items
+
 
 
 
@@ -402,33 +504,9 @@ def get_base_Image(SsrData, Region, ProjStr, Scale, StartStr, EndStr, AngleDB = 
     unique_items.append(item_group[0])
 
   #==========================================================================================================
-  # Filter 'unique_items' based on 'AngleDB' if it is provided
+  # Ingest imaging geometry angles into each STAC item
   #==========================================================================================================
-  AngleDB = pd.DataFrame(AngleDB)  
-  if AngleDB.empty == False:
-    filtered_items = []
-    id_name = AngleDB.columns[0]
-    DB_keys = AngleDB[id_name].values
-    for item in unique_items:
-      tokens   = str(item.id).split('_')   #core image ID
-      scene_id = tokens[0] + '_' + tokens[1] + '_' + tokens[2] + '_' + tokens[4]
-
-      if scene_id in DB_keys: #AngleDB[id_name].values:
-        DB_index = AngleDB.loc[AngleDB[id_name] == scene_id].index
-        row_dict = AngleDB.loc[DB_index].to_dict()
-        sub_key = list(row_dict['sza'].keys())[0]
-        #print(f'{sub_key}')
-
-        item.properties['sza'] = row_dict['sza'][sub_key]
-        item.properties['saa'] = row_dict['saa'][sub_key]
-        item.properties['vza'] = row_dict['vza'][sub_key]
-        item.properties['vaa'] = row_dict['vaa'][sub_key]
-      
-        filtered_items.append(item)
-        #print(item.Datetime)
-
-  else:
-    filtered_items = unique_items
+  unique_items = ingest_Geo_Angles(unique_items)
 
   #==========================================================================================================
   # Load the first image based on the boundary box of ROI
@@ -436,7 +514,7 @@ def get_base_Image(SsrData, Region, ProjStr, Scale, StartStr, EndStr, AngleDB = 
   Bbox = eoUs.get_region_bbox(Region)
   print('<get_base_Image> The bbox of the given region = ', Bbox)
 
-  ds_xr = odc.stac.load([filtered_items[0]],
+  ds_xr = odc.stac.load([unique_items[0]],
                         bands  = criteria['bands'],
                         chunks = {'x': 1000, 'y': 1000},
                         crs    = ProjStr, 
@@ -451,7 +529,7 @@ def get_base_Image(SsrData, Region, ProjStr, Scale, StartStr, EndStr, AngleDB = 
   out_xrDS = ds_xr.isel(time=0)
   stop_time = time.time() 
   
-  return out_xrDS.astype(np.int16), filtered_items, (stop_time - start_time)/60
+  return out_xrDS.astype(np.int16), unique_items, (stop_time - start_time)/60
 
 
 
@@ -586,7 +664,6 @@ def attach_score(SsrData, ready_IC, StartStr, EndStr, ExtraBandCode):
     ready_IC[eoIM.pix_score][i, :,:] = spec_score * time_score 
    
   Parallel(n_jobs=-1, require='sharedmem')(delayed(score_one_img)(i, time) for i, time in enumerate(ready_IC.time.values))  
-  #Parallel(n_jobs=-1)(delayed(score_one_img)(i, time) for i, time in enumerate(ready_IC.time.values))  
 
   stop = time.time() 
 

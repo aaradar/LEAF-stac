@@ -1,6 +1,9 @@
 #import pvlib
 import calendar
+import numpy as np
 from datetime import datetime, timedelta
+from sgp4.api import Satrec
+from sgp4.api import jday
 
 
 import eoImage as Img
@@ -368,8 +371,148 @@ def get_sun_angles(Date, Lat, Lon):
 
 
 #############################################################################################################
+# Description: This function returns the position and velocity of a satellite
+#
+# Note:        Two Line Element (TLE) sets were obtained from "https://www.n2yo.com/satellite/?s=42063#results"
+#
+# Revision history:  2024-Jul-22  Lixin Sun  Initial creation
+#
+#############################################################################################################
+def get_satellite_pos(SsrKeyStr, DT_obj):
+  '''
+    Args:
+      SsrKeyStr(String): A string representing a specific EO satellite. E.g., 'S2A', 'S2B', 'LS8' and 'LS9'
+                         represent Sentinel-2A, Sentinel-2B, Landsat-8 and Landsat-9 satellite, respectively.'''
+  #==========================================================================================================
+  # Validate the given sensor key string
+  #==========================================================================================================
+  valid_ssr_str = ['s2a', 's2b', 'ls8', 'ls9']
+
+  ssr_str = str(SsrKeyStr).lower()
+  if ssr_str not in valid_ssr_str:
+    return None
+  
+  #==========================================================================================================
+  # Extract TLE lines according to the given sensor key string
+  #==========================================================================================================
+  TLEs = {'S2A': {'line1': '1 40697U 15028A   24204.20753257  .00000390  00000-0  16528-3 0  9992',
+                  'line2': '2 40697  98.5677 277.9775 0001155  93.0244 267.1071 14.30813154474355'},
+          'S2B': {'line1': '1 42063U 17013A   24204.17258506  .00000401  00000-0  16965-3 0  9998',
+                  'line2': '2 42063  98.5682 277.9400 0001138  94.6249 265.5063 14.30819489385269'},
+          'LS8': {'line1': '1 39084U 13008A   24204.15805741  .00001050  00000-0  24313-3 0  9991',
+                  'line2': '2 39084  98.2276 273.3416 0001165 108.8946 251.2378 14.57101933608506'},
+          'LS9': {'line1': '1 49260U 21088A   24204.19228775  .00001091  00000-0  25218-3 0  9995',
+                  'line2': '2 49260  98.2303 273.3466 0001292  93.5162 266.6184 14.57118537149783'}
+         }
+  
+  tle_line1 = TLEs[SsrKeyStr]['line1']
+  tle_line2 = TLEs[SsrKeyStr]['line2']
+  
+  #==========================================================================================================
+  # 
+  #==========================================================================================================
+  satellite = Satrec.twoline2rv(tle_line1, tle_line2)
+  
+  #==========================================================================================================
+  # Date and time of image capture (replace with actual date and time)
+  #==========================================================================================================
+  jd, fr = jday(DT_obj.year, DT_obj.month, DT_obj.day, DT_obj.hour, DT_obj.minute, DT_obj.second)
+  e, r, v = satellite.sgp4(jd, fr)
+
+  return [e, r, v]
+
+
+
+#############################################################################################################
+# Description: This function returns the Earth-Centre, Earth-Fixed (ECEF) coordinates (x,y,z) of a point with
+#              Latitude, Longitude and Altitude values.
+#
+# Revision history:  2024-Jul-22  Lixin Sun  Initial creation
+#
+#############################################################################################################
+def latlon_to_ECEF(lat, lon, alt):
+  # WGS84 ellipsoid constants
+  a = 6378137.0  # semi-major axis
+  e = 8.1819190842622e-2  # eccentricity
+
+  lat = np.radians(lat)
+  lon = np.radians(lon)
+
+  N = a / np.sqrt(1 - e**2 * np.sin(lat)**2)
+  x = (N + alt) * np.cos(lat) * np.cos(lon)
+  y = (N + alt) * np.cos(lat) * np.sin(lon)
+  z = ((1 - e**2) * N + alt) * np.sin(lat)
+
+  return np.array([x, y, z])
+
+
+
+
+
+#############################################################################################################
+# Description: This function returns the position and velocity of a satellite
+#
+# Revision history:  2024-Jul-22  Lixin Sun  Initial creation
+#
+#############################################################################################################
+def calculate_angles(sat_pos, pixel_pos):
+  sat_to_pixel = pixel_pos - sat_pos
+  pixel_to_center = -pixel_pos
+
+  zenith_angle = np.arccos(
+    np.dot(sat_to_pixel, pixel_to_center) /
+    (np.linalg.norm(sat_to_pixel) * np.linalg.norm(pixel_to_center))
+  )
+
+  north = np.array([0, 0, 1])  # Assuming a simplified north vector
+  proj_sat_to_pixel = sat_to_pixel - np.dot(sat_to_pixel, north) * north
+  azimuth_angle = np.arctan2(proj_sat_to_pixel[1], proj_sat_to_pixel[0])
+
+  return np.degrees(zenith_angle), np.degrees(azimuth_angle)
+
+
+
+#############################################################################################################
+# Description: This function returns average view zenith and azimuth angles
+#
+# Revision history:  2024-Jul-22  Lixin Sun  Initial creation
+#
+#############################################################################################################
+def get_average_VAs(SsrKeyStr, TimeStamp, CentreLat, CentreLon, CentreAlt):
+  sensor_pos = get_satellite_pos(SsrKeyStr, TimeStamp)
+  pixel_pos  = latlon_to_ECEF(CentreLat, CentreLon, CentreAlt)
+  
+  if sensor_pos == None or sensor_pos[0] != 0:
+    return None
+  
+  sat_pos = np.array(sensor_pos[1])*1000
+  sat_to_pixel    = pixel_pos - sat_pos
+  #sat_to_pixel = [x - y for x, y in zip(pixel_pos, sensor_pos[1])]
+  pixel_to_center = -pixel_pos
+
+  zenith_angle = np.arccos(
+    np.dot(sat_to_pixel, pixel_to_center) /
+    (np.linalg.norm(sat_to_pixel) * np.linalg.norm(pixel_to_center))
+  )
+
+  north = np.array([0, 0, 1])  # Assuming a simplified north vector
+  proj_sat_to_pixel = sat_to_pixel - np.dot(sat_to_pixel, north) * north
+  azimuth_angle = np.arctan2(proj_sat_to_pixel[1], proj_sat_to_pixel[0])
+
+  #vza, vaa = calculate_angles(sat_pos, pixel_pos)
+
+  return {'vza': zenith_angle, 'vaa': azimuth_angle}
+
+
+
+
+
+
+#############################################################################################################
 # cases testing code
 #############################################################################################################
+#get_average_VAs('S2A', TimeStamp, CentreLat, CentreLon, CentreAlt)
+
 #result = time_window_size('2023-09-30', '2024-10-10')
 
 #print('\nresult = ', result)
