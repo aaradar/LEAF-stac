@@ -597,9 +597,9 @@ def attach_AngleBands(xrDS, StacItems):
   
   sorted_items = sorted(StacItems, key=get_sort_key)
  
-  for item in sorted_items:
-    eoIM.get_Img_Angles(item)
-    print(item)
+  #for item in sorted_items:
+  #  eoIM.get_Img_Angles(item)
+  #  print(item)
 
   #eoUs.get_average_VAs('S2A', TimeStamp, CentreLat, CentreLon, CentreAlt)
   #==========================================================================================================

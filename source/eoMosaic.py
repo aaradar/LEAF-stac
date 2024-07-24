@@ -255,6 +255,7 @@ def ingest_Geo_Angles_GEE_DB(StacItems, AngleDB = None):
 
 
 def ingest_Geo_Angles(StacItems):
+  startT = time.time()
   #==========================================================================================================
   # Confirm the given item list is not empty
   #==========================================================================================================
@@ -276,7 +277,10 @@ def ingest_Geo_Angles(StacItems):
 
     out_items.append(item)
   
-  return out_items
+  endT   = time.time()
+  totalT = (endT - startT)/60
+
+  return out_items, totalT
 
 
 
@@ -506,7 +510,8 @@ def get_base_Image(SsrData, Region, ProjStr, Scale, StartStr, EndStr):
   #==========================================================================================================
   # Ingest imaging geometry angles into each STAC item
   #==========================================================================================================
-  unique_items = ingest_Geo_Angles(unique_items)
+  unique_items, angle_time = ingest_Geo_Angles(unique_items)
+  print('\n The total elapsed time for ingesting angles = %6.2f minutes'%(angle_time))
 
   #==========================================================================================================
   # Load the first image based on the boundary box of ROI
@@ -1101,7 +1106,7 @@ def period_mosaic(inParams, ExtraBands):
     
   mosaic_stop = time.time()
   mosaic_time = (mosaic_stop - mosaic_start)/60
-  print('\n\n<<<<<<<<<< The total elapsed time for generating the mosaic = % 6.2f minutes>>>>>>>>>'%(mosaic_time))
+  print('\n\n<<<<<<<<<< The total elapsed time for generating the mosaic = %6.2f minutes>>>>>>>>>'%(mosaic_time))
   
   return base_img
   
