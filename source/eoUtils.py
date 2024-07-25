@@ -2,8 +2,6 @@
 import calendar
 import numpy as np
 from datetime import datetime, timedelta
-from sgp4.api import Satrec
-from sgp4.api import jday
 
 
 import eoImage as Img
