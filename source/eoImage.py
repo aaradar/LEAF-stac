@@ -1,10 +1,13 @@
 
 import math
+import os
 import numpy as np
 import time
 import datetime
-
+#import rasterio
+import rioxarray
 import xarray as xr
+
 import eoUtils as eoUs
 import eoImage as eoIM
 
@@ -42,6 +45,7 @@ RED1_band      = 9
 WV_band        = 10
 
 
+pix_QA          = 'pix_qa'
 pix_score       = 'score'
 score_target    = 'score_target'
 pix_date        = 'date'
@@ -654,3 +658,71 @@ def get_MonthName(month_numb):
     return MONTH_NAMES[month-1]
   else:
     return 'season'
+  
+
+
+
+#############################################################################################################
+# Description: This function reads a GeoTIF image from a local drive and saves it as a xarray.dataset object.   
+#  
+# Revision history:  2024-Aug-01  Lixin Sun  Initial creation
+#
+#############################################################################################################
+def read_geotiff(ImgPath, OutName='band'):
+  if not os.path.exists(ImgPath):
+    print('<read_geotiff_img> The given image file <%s> does not exist!'%(ImgPath))
+    return None
+  
+  return rioxarray.open_rasterio(ImgPath)
+  
+  '''
+  # Read the GeoTIFF file into an xarray.DataArray
+  with rasterio.open(ImgPath) as src:
+    # Read the image data into a numpy array
+    img_data = src.read(1)  # Read the first band
+
+    # Create an xarray.DataArray
+    data_array = xr.DataArray(img_data, 
+                              dims = ["y", "x"],
+                              coords = {"y": np.arange(img_data.shape[0]), "x": np.arange(img_data.shape[1])},
+                              attrs = src.meta)
+
+    # Convert the DataArray to a Dataset if needed
+    return data_array.to_dataset(name=OutName)
+  '''
+
+
+
+#############################################################################################################
+# Description: This function returns a subset of "Source_xrDS" so that it covers the same spatial area as
+#              "Refer_xrDs" does and resample it as necessary.
+#  
+# Revision history:  2024-Aug-02  Lixin Sun  Initial creation
+#
+#############################################################################################################
+def xrDS_spatial_match(Refer_xrDs, Source_xrDS, Flip_Y = True):
+  #==========================================================================================================
+  # Determine the spatial extent of the reference xarray.dataset
+  #==========================================================================================================  
+  min_x, max_x = Refer_xrDs.x.min().values, Refer_xrDs.x.max().values
+  min_y, max_y = Refer_xrDs.y.min().values, Refer_xrDs.y.max().values
+  
+  if Flip_Y:
+    min_y, max_y = max_y, min_y
+
+  # Clip the larger dataset to the extent of the smaller dataset
+  # The `sel` method will use the defined extent to select the region of interest
+  clipped_source = Source_xrDS.sel(x=slice(min_x, max_x), y=slice(min_y, max_y))
+
+  # Resample Source_xrDS to match that of Refer_xrDs
+  return clipped_source.interp_like(Refer_xrDs)
+
+
+
+
+
+
+
+
+#test_img = read_geotiff('C:\\Work_documents\\Canada_LC_2020_30m.tif', OutName='test_band')
+#print(test_img)

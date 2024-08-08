@@ -70,6 +70,63 @@ import eoParams as eoPM
 
 
 
+#############################################################################################################
+# Description: This function returns a collection of images from a specified catalog and collection based on
+#              given spatial region, timeframe and filtering criteria. The returned image collection will be 
+#              stored in a xarray.Dataset structure.
+#
+# Note: (1) It seems that you can retrieve catalog info on AWS Landsat collection, but cannot access assets.
+#
+# Revision history:  2024-May-24  Lixin Sun  Initial creation
+# 
+#############################################################################################################
+def get_query_conditions(SsrData, StartStr, EndStr):
+  ssr_code = SsrData['SSR_CODE']
+  query_conds = {}
+  
+  #==================================================================================================
+  # Create a filter for the search based on metadata. The filtering params will depend upon the 
+  # image collection we are using. e.g. in case of Sentine 2 L2A, we can use params such as: 
+  #
+  # eo:cloud_cover
+  # s2:dark_features_percentage
+  # s2:cloud_shadow_percentage
+  # s2:vegetation_percentage
+  # s2:water_percentage
+  # s2:not_vegetated_percentage
+  # s2:snow_ice_percentage, etc.
+  # 
+  # For many other collections, the Microsoft Planetary Computer has a STAC server at 
+  # https://planetarycomputer-staging.microsoft.com/api/stac/v1 (this info comes from 
+  # https://www.matecdev.com/posts/landsat-sentinel-aws-s3-python.html)
+  #==================================================================================================  
+  if ssr_code > eoIM.MAX_LS_CODE and ssr_code < eoIM.MOD_sensor:
+    query_conds['catalog']    = "https://earth-search.aws.element84.com/v1"
+    query_conds['collection'] = "sentinel-2-l2a"
+    query_conds['timeframe']  = str(StartStr) + '/' + str(EndStr)
+    query_conds['bands']      = ['blue', 'green', 'red', 'rededge1', 'rededge2', 'rededge3', 'nir08', 'swir16', 'swir22', 'scl']
+    query_conds['filters']    = {"eo:cloud_cover": {"lt": 80.0} }    
+
+  elif ssr_code < eoIM.MAX_LS_CODE and ssr_code > 0:
+    #query_conds['catalog']    = "https://landsatlook.usgs.gov/stac-server"
+    #query_conds['collection'] = "landsat-c2l2-sr"
+    query_conds['catalog']    = "https://earth-search.aws.element84.com/v1"
+    query_conds['collection'] = "landsat-c2-l2"
+    query_conds['timeframe']  = str(StartStr) + '/' + str(EndStr)
+    #query_conds['bands']      = ['OLI_B2', 'OLI_B3', 'OLI_B4', 'OLI_B5', 'OLI_B6', 'OLI_B7', 'qa_pixel']
+    query_conds['bands']      = ['blue', 'green', 'red', 'nir08', 'swir16', 'swir22', 'qa_pixel']
+    query_conds['filters']    = {"eo:cloud_cover": {"lt": 80.0}}  
+  elif ssr_code == eoIM.HLS_sensor:
+    query_conds['catalog']    = "https://cmr.earthdata.nasa.gov/stac/LPCLOUD"
+    query_conds['collection'] = "HLSL30.v2.0"
+    query_conds['timeframe']  = str(StartStr) + '/' + str(EndStr)
+    query_conds['bands']      = ['blue', 'green', 'red', 'nir08', 'swir16', 'swir22', 'qa_pixel']
+    query_conds['filters']    = {"eo:cloud_cover": {"lt": 80.0}}  
+
+  return query_conds
+
+
+
 
 #############################################################################################################
 # Description: This function returns average view angles (VZA and VAA) for a given STAC item/scene
@@ -118,6 +175,49 @@ def display_meta_assets(stac_items):
 
 
 
+#############################################################################################################
+# Description: This function returns the results of searching a STAC catalog
+#
+# Revision history:  2024-May-24  Lixin Sun  Initial creation
+#                    2024-Jul-12  Lixin Sun  Added a filter to retain only one image from the items with
+#                                            identical timestamps.
+#
+#############################################################################################################
+def search_STAC_Catalog(Region, Criteria, MaxImgs, based_on_region = True):
+  '''
+    Args:      
+  '''
+  # use publically available stac 
+  catalog = psc.client.Client.open(str(Criteria['catalog'])) 
+
+  #==================================================================================================
+  # Search and filter a image collection
+  #================================================================================================== 
+  if based_on_region == True:
+    print('<search_STAC_Images> The given region = ', Region)
+    stac_catalog = catalog.search(collections = [str(Criteria['collection'])], 
+                                  intersects  = Region,                           
+                                  datetime    = str(Criteria['timeframe']), 
+                                  query       = Criteria['filters'],
+                                  limit       = MaxImgs)
+        
+  else:
+    Bbox = eoUs.get_region_bbox(Region)
+    print('<search_STAC_Images> The bbox of the given region = ', Bbox)
+
+    stac_catalog = catalog.search(collections = [str(Criteria['collection'])], 
+                                   bbox        = Bbox,                           
+                                   datetime    = str(Criteria['timeframe']), 
+                                   query       = Criteria['filters'],
+                                   limit       = MaxImgs)
+  
+  stac_items = list(stac_catalog.items())
+    
+  return stac_items
+    
+
+
+
 
 #############################################################################################################
 # Description: This function returns a list of unique tile names contained in a given "StatcItems" list.
@@ -126,6 +226,9 @@ def display_meta_assets(stac_items):
 # 
 #############################################################################################################
 def get_unique_tile_names(StacItems):
+  '''
+    Args:
+      StacItems(List): A list of stac items. '''
   stac_items = list(StacItems)
   unique_names = []
 
@@ -145,6 +248,46 @@ def get_unique_tile_names(StacItems):
       unique_names.append(new_tile)
 
   return unique_names 
+
+
+
+
+
+
+#############################################################################################################
+# Description: This function returns a list of unique STAC items searched for a region and time window.
+#
+# Revision history:  2024-Jul-17  Lixin Sun  Initial creation
+# 
+#############################################################################################################
+def get_unique_STAC_items(inSTACItems):
+  '''
+     Args:
+        inSTACItems(): A given list of STAC items to be filtered based on timestamps.'''
+ 
+  #==========================================================================================================
+  # Retain only one image from the items with identical timestamps
+  #==========================================================================================================
+  # Create a dictionary to store items by their timestamp
+  items_by_id = defaultdict(list)
+
+  # Create a new dictionary with the core image ID as keys
+  for item in inSTACItems:    
+    tokens = str(item.id).split('_')   #core image ID
+    id = tokens[0] + '_' + tokens[1] + '_' + tokens[2]
+    items_by_id[id].append(item)
+  
+  # Iterate through the items and retain only one item per timestamp
+  unique_items = []
+  for id, item_group in items_by_id.items():
+    # Assuming we keep the first item in each group
+    unique_items.append(item_group[0])
+
+  return unique_items
+
+
+
+
 
 
 
@@ -218,62 +361,6 @@ def ingest_Geo_Angles(StacItems):
 
 
 
-#############################################################################################################
-# Description: This function returns a collection of images from a specified catalog and collection based on
-#              given spatial region, timeframe and filtering criteria. The returned image collection will be 
-#              stored in a xarray.Dataset structure.
-#
-# Note: (1) It seems that you can retrieve catalog info on AWS Landsat collection, but cannot access assets.
-#
-# Revision history:  2024-May-24  Lixin Sun  Initial creation
-# 
-#############################################################################################################
-def get_query_conditions(SsrData, StartStr, EndStr):
-  ssr_code = SsrData['SSR_CODE']
-  query_conds = {}
-  
-  #==================================================================================================
-  # Create a filter for the search based on metadata. The filtering params will depend upon the 
-  # image collection we are using. e.g. in case of Sentine 2 L2A, we can use params such as: 
-  #
-  # eo:cloud_cover
-  # s2:dark_features_percentage
-  # s2:cloud_shadow_percentage
-  # s2:vegetation_percentage
-  # s2:water_percentage
-  # s2:not_vegetated_percentage
-  # s2:snow_ice_percentage, etc.
-  # 
-  # For many other collections, the Microsoft Planetary Computer has a STAC server at 
-  # https://planetarycomputer-staging.microsoft.com/api/stac/v1 (this info comes from 
-  # https://www.matecdev.com/posts/landsat-sentinel-aws-s3-python.html)
-  #==================================================================================================  
-  if ssr_code > eoIM.MAX_LS_CODE and ssr_code < eoIM.MOD_sensor:
-    query_conds['catalog']    = "https://earth-search.aws.element84.com/v1"
-    query_conds['collection'] = "sentinel-2-l2a"
-    query_conds['timeframe']  = str(StartStr) + '/' + str(EndStr)
-    query_conds['bands']      = ['blue', 'green', 'red', 'rededge1', 'rededge2', 'rededge3', 'nir08', 'swir16', 'swir22', 'scl']
-    query_conds['filters']    = {"eo:cloud_cover": {"lt": 80.0} }    
-
-  elif ssr_code < eoIM.MAX_LS_CODE and ssr_code > 0:
-    #query_conds['catalog']    = "https://landsatlook.usgs.gov/stac-server"
-    #query_conds['collection'] = "landsat-c2l2-sr"
-    query_conds['catalog']    = "https://earth-search.aws.element84.com/v1"
-    query_conds['collection'] = "landsat-c2-l2"
-    query_conds['timeframe']  = str(StartStr) + '/' + str(EndStr)
-    #query_conds['bands']      = ['OLI_B2', 'OLI_B3', 'OLI_B4', 'OLI_B5', 'OLI_B6', 'OLI_B7', 'qa_pixel']
-    query_conds['bands']      = ['blue', 'green', 'red', 'nir08', 'swir16', 'swir22', 'qa_pixel']
-    query_conds['filters']    = {"eo:cloud_cover": {"lt": 80.0}}  
-  elif ssr_code == eoIM.HLS_sensor:
-    query_conds['catalog']    = "https://cmr.earthdata.nasa.gov/stac/LPCLOUD"
-    query_conds['collection'] = "HLSL30.v2.0"
-    query_conds['timeframe']  = str(StartStr) + '/' + str(EndStr)
-    query_conds['bands']      = ['blue', 'green', 'red', 'nir08', 'swir16', 'swir22', 'qa_pixel']
-    query_conds['filters']    = {"eo:cloud_cover": {"lt": 80.0}}  
-
-  return query_conds
-
-
 
 
 #############################################################################################################
@@ -283,6 +370,7 @@ def get_query_conditions(SsrData, StartStr, EndStr):
 # Revision history:  2024-Jul-15  Lixin Sun  Initial creation
 # 
 #############################################################################################################
+'''
 def read_angleDB(DB_fullpath):
   if os.path.isfile(DB_fullpath) == False:
     return None
@@ -304,48 +392,7 @@ def read_angleDB(DB_fullpath):
   
   return angle_DB
   #print(angle_DB.head())
-
-
-#############################################################################################################
-# Description: This function returns the results of searching a STAC catalog
-#
-# Revision history:  2024-May-24  Lixin Sun  Initial creation
-#                    2024-Jul-12  Lixin Sun  Added a filter to retain only one image from the items with
-#                                            identical timestamps.
-#
-#############################################################################################################
-def search_STAC_Catalog(Region, Criteria, MaxImgs, based_on_region = True):
-  '''
-    Args:      
-  '''
-  # use publically available stac 
-  catalog = psc.client.Client.open(str(Criteria['catalog'])) 
-
-  #==================================================================================================
-  # Search and filter a image collection
-  #================================================================================================== 
-  if based_on_region == True:
-    print('<search_STAC_Images> The given region = ', Region)
-    stac_catalog = catalog.search(collections = [str(Criteria['collection'])], 
-                                  intersects  = Region,                           
-                                  datetime    = str(Criteria['timeframe']), 
-                                  query       = Criteria['filters'],
-                                  limit       = MaxImgs)
-        
-  else:
-    Bbox = eoUs.get_region_bbox(Region)
-    print('<search_STAC_Images> The bbox of the given region = ', Bbox)
-
-    stac_catalog = catalog.search(collections = [str(Criteria['collection'])], 
-                                   bbox        = Bbox,                           
-                                   datetime    = str(Criteria['timeframe']), 
-                                   query       = Criteria['filters'],
-                                   limit       = MaxImgs)
-  
-  stac_items = list(stac_catalog.items())
-    
-  return stac_items
-    
+'''
 
 
 
@@ -358,54 +405,34 @@ def search_STAC_Catalog(Region, Criteria, MaxImgs, based_on_region = True):
 #                    2024-Jul-17  Lixin Sun  Modified so that only unique and filtered STAC items will be
 #                                            returned 
 #############################################################################################################
-def get_base_Image(SsrData, Region, ProjStr, Scale, StartStr, EndStr):
+def get_base_Image(Region, ProjStr, Scale, Criteria):
   '''
   '''
   start_time = time.time()
 
   #==========================================================================================================
-  # Obtain query criteria, and then search a specified STAC catalog based on the criteria
+  # Obtain a list of unique STAC items that cover the entire ROI and were acquired within the time window
+  #==========================================================================================================
+  #unique_items = get_unique_STAC_items(Region, Criteria)
+
+  #==========================================================================================================
+  # Search all the STAC items based on a spatial region and time window
   # Note: The third parameter (MaxImgs) for "search_STAC_Catalog" function cannot be too large. Otherwise,
   #       a server internal error will be triggered.
-  #==========================================================================================================
-  criteria   = get_query_conditions(SsrData, StartStr, EndStr)
-  stac_items = search_STAC_Catalog(Region, criteria, 100, True)
+  #==========================================================================================================  
+  stac_items = search_STAC_Catalog(Region, Criteria, 100, True)
 
-  print(f"<get_base_Image> A total of {len(stac_items):d} items were found.")
+  print(f"<get_unique_STAC_items> A total of {len(stac_items):d} items were found.")
   display_meta_assets(stac_items)
   
-  #==========================================================================================================
-  # Retain only one image from the items with identical timestamps
-  #==========================================================================================================
-  # Create a dictionary to store items by their timestamp
-  items_by_id = defaultdict(list)
-
-  # Create a new dictionary with the core image ID as keys
-  for item in stac_items:    
-    tokens = str(item.id).split('_')   #core image ID
-    id = tokens[0] + '_' + tokens[1] + '_' + tokens[2]
-    items_by_id[id].append(item)
-  
-  # Iterate through the items and retain only one item per timestamp
-  unique_items = []
-  for id, item_group in items_by_id.items():
-    # Assuming we keep the first item in each group
-    unique_items.append(item_group[0])
-
-  #==========================================================================================================
-  # Ingest imaging geometry angles into each STAC item
-  #==========================================================================================================
-  unique_items, angle_time = ingest_Geo_Angles(unique_items)
-  print('\n The total elapsed time for ingesting angles = %6.2f minutes'%(angle_time))
-
   #==========================================================================================================
   # Load the first image based on the boundary box of ROI
   #==========================================================================================================
   Bbox = eoUs.get_region_bbox(Region)
   print('<get_base_Image> The bbox of the given region = ', Bbox)
 
-  ds_xr = odc.stac.load([unique_items[0]],
-                        bands  = criteria['bands'],
+  ds_xr = odc.stac.load([stac_items[0]],
+                        bands  = Criteria['bands'],
                         chunks = {'x': 1000, 'y': 1000},
                         crs    = ProjStr, 
                         bbox   = Bbox,
@@ -417,9 +444,30 @@ def get_base_Image(SsrData, Region, ProjStr, Scale, StartStr, EndStr):
     ds_xr.load()
 
   out_xrDS = ds_xr.isel(time=0)
+
+  #==========================================================================================================
+  # Attach necessary extra bands and then mask out all the pixels
+  #==========================================================================================================
+  band1 = Criteria['bands'][0]  
+  out_xrDS[eoIM.pix_date] = out_xrDS[band1]
+
+  '''
+  if ExtraBands == eoIM.EXTRA_ANGLE:
+    base_img["cosSZA"]      = out_xrDS[band1]
+    base_img["cosVZA"]      = out_xrDS[band1]
+    base_img["cosRAA"]      = out_xrDS[band1]
+    base_img[eoIM.pix_score] = out_xrDS[band1]
+  '''
+
+  #==========================================================================================================
+  # Mask out all the pixels in each variable of "base_img", so they will treated as gap/missing pixels
+  #==========================================================================================================
+  out_xrDS = out_xrDS*0
+  out_xrDS = out_xrDS.where(out_xrDS > 0)
+
   stop_time = time.time() 
   
-  return out_xrDS.astype(np.int16), unique_items, (stop_time - start_time)/60
+  return out_xrDS, stac_items, (stop_time - start_time)/60
 
 
 
@@ -742,7 +790,7 @@ def period_mosaic(inParams, ExtraBands):
   ProjStr = str(params['projection'])  
   Scale   = int(params['resolution'])
 
-  Region  = eoPM.get_spatial_region(params)
+  Region           = eoPM.get_spatial_region(params)
   StartStr, EndStr = eoPM.get_time_window(params)  
 
   criteria = get_query_conditions(SsrData, StartStr, EndStr)
@@ -750,24 +798,8 @@ def period_mosaic(inParams, ExtraBands):
   #==========================================================================================================
   # Create a base image that has full spatial dimensions covering ROI
   #==========================================================================================================
-  base_img, stac_items, used_time = get_base_Image(SsrData, Region, ProjStr, Scale, StartStr, EndStr)
+  base_img, stac_items, used_time = get_base_Image(Region, ProjStr, Scale, criteria)
   
-  #==========================================================================================================
-  # Attach necessary extra bands and then mask out all the pixels
-  #==========================================================================================================
-  blue_band = base_img[SsrData['BLU']]
-  
-  base_img[eoIM.pix_date] = blue_band
-
-  if ExtraBands == eoIM.EXTRA_ANGLE:
-    base_img["cosSZA"]      = blue_band
-    base_img["cosVZA"]      = blue_band
-    base_img["cosRAA"]      = blue_band
-    #base_img[eoIM.pix_score] = blue_band
-
-  # Mask out all the pixels in each variable of "base_img", so they will treated as gap/missing pixels
-  base_img = base_img*0
-  base_img = base_img.where(base_img > 0)
   print('\n<period_mosaic> based mosaic image = ', base_img)
   print('\n<<<<<<<<<< Complete generating base image, elapsed time = %6.2f minutes>>>>>>>>>'%(used_time))  
 
@@ -778,8 +810,9 @@ def period_mosaic(inParams, ExtraBands):
   print('\n<<<<<< The number of unique tiles = %d >>>>>>>'%(len(unique_tiles))) 
 
   def mosaic_one_tile(tile, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale, ExtraBands):
-    one_tile_items  = get_one_tile_items(stac_items, tile)  # Extract a list of items based on an unique tile name       
-    one_tile_mosaic = get_tile_submosaic(SsrData, one_tile_items, StartStr, EndStr, criteria['bands'], ProjStr, Scale, ExtraBands)
+    one_tile_items  = get_one_tile_items(stac_items, tile)  # Extract a list of items based on an unique tile name
+    filtered_items  = get_unique_STAC_items(one_tile_items)
+    one_tile_mosaic = get_tile_submosaic(SsrData, filtered_items, StartStr, EndStr, criteria['bands'], ProjStr, Scale, ExtraBands)
 
     if one_tile_mosaic is not None:
       max_spec_val    = xr.apply_ufunc(np.maximum, one_tile_mosaic[SsrData['BLU']], one_tile_mosaic[SsrData['NIR']])
@@ -794,14 +827,12 @@ def period_mosaic(inParams, ExtraBands):
     futures = [executor.submit(mosaic_one_tile, tile, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale, ExtraBands) for tile in unique_tiles]    
     count = 0
     for future in concurrent.futures.as_completed(futures):
-      startT = time.time()  
       one_tile_mosaic = future.result()
       if one_tile_mosaic is not None:
         base_img = base_img.combine_first(one_tile_mosaic)        
         count += 1
       
-      stopT = time.time()
-      print('\n<<<<<<<<<< Complete %2dth sub mosaic, elapsed time = %6.2f minutes>>>>>>>>>'%(count, (stopT - startT)/60.0))
+      print('\n<<<<<<<<<< Complete %2dth sub mosaic >>>>>>>>>'%(count))
 
   mosaic_stop = time.time()
   mosaic_time = (mosaic_stop - mosaic_start)/60
@@ -871,7 +902,7 @@ def export_mosaic(inParams, inMosaic):
 
 
 
-'''
+
 params = {
     'sensor': 'S2_SR',           # A sensor type string (e.g., 'S2_SR' or 'L8_SR' or 'MOD_SR')
     'unit': 2,                   # A data unit code (1 or 2 for TOA or surface reflectance)    
@@ -891,7 +922,7 @@ params = {
 mosaic = period_mosaic(params, eoIM.EXTRA_ANGLE)
 
 # export_mosaic(params, mosaic)
-'''
+
 
 
 
