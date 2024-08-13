@@ -246,7 +246,7 @@ def applyNet(stacked_xrDS, one_VP_nets, netID_map, netID):
     #========================================================================================================
     # Create an image by masking out the pixels with different network IDs from 'netID'  
     #========================================================================================================
-    masked_stacked_xrDS = stacked_xrDS.where(netID_map['netID_map'] == netID, np.nan)
+    #masked_stacked_xrDS = stacked_xrDS.where(netID_map['netID_map'] == netID, np.nan)
 
     #========================================================================================================
     # Select one network specific for ONE vegetation parameter and a given 'netID'
@@ -263,28 +263,39 @@ def applyNet(stacked_xrDS, one_VP_nets, netID_map, netID):
     outSlope  = np.array(selected_net['outSlope'])
     
     # Convert stacked data to NumPy array
-    data_array = masked_stacked_xrDS.values
-    
+    data_array   = stacked_xrDS.values
+    [d0, d1, d2] = data_array.shape
+    data_array   = data_array.reshape(d0, d1*d2) 
+
     # Input scaling
-    scaled_data = data_array * inpSlope[:, None, None] + inpOffset[:, None, None]
+    scaled_data = data_array * inpSlope[:, None] + inpOffset[:, None]
     
-    # First hidden layer
-    l12D = np.tensordot(h1wt, scaled_data, axes=(1, 0)) + h1bi[:, None, None]
+    # First hidden layer    
+    #reshaped_h1wt = np.reshape(h1wt,[len(h1bi),len(inpOffset)])
+    #res_shape = reshaped_h1wt.shape[:1] + scaled_data.shape[1:]
+    #l12D = (reshaped_h1wt @ scaled_data.reshape(scaled_data.shape[0], -1)).reshape(res_shape) + h1bi[:, None, None]
+    #l12D = np.tensordot(h1wt, scaled_data, axes=(1, 0)) + h1bi[:, None, None]
+
+    l12D = np.matmul(np.reshape(h1wt,[len(h1bi),len(inpOffset)]), scaled_data)+h1bi[:,None]
     
     # Apply tansig activation function
-    l2inp3D = 2 / (1 + np.exp(-2 * l12D)) - 1
+    l2inp2D = 2 / (1 + np.exp(-2 * l12D)) - 1
     
     # Second hidden layer
-    l22D = np.tensordot(h2wt, l2inp3D, axes=(0, 0)) + h2bi[:, None, None]
+    l22D = np.sum(l2inp2D*h2wt[:, None], axis=0) + h2bi
     
     # Output scaling
-    output_band = (l22D - outBias[:, None, None]) / outSlope[:, None, None]
+    outputBand = (l22D - outBias[:, None]) / outSlope[:, None]
     
     # Create a new xarray.Dataset for the output
-    output_ds = xr.Dataset({f'band_{i}': (('y', 'x'), output_band[i]) for i in range(output_band.shape[0])},
-                           coords={'y': masked_stacked_xrDS.coords['y'], 'x': masked_stacked_xrDS.coords['x']})
-    
-    return output_ds
+    outputBand = outputBand.reshape(d1,d2)
+    #outputBand = outputBand.flatten()
+
+    #output_ds = xr.Dataset({f'band_{i}': (('y', 'x'), output_band[i]) for i in range(output_band.shape[0])},
+    #                       coords={'y': masked_stacked_xrDS.coords['y'], 'x': masked_stacked_xrDS.coords['x']})
+    coords = {'y': stacked_xrDS.coords['y'].values, 'x': stacked_xrDS.coords['x'].values}
+
+    return xr.DataArray(outputBand, coords, ['y', 'x'])
 
 
 
@@ -312,11 +323,15 @@ def one_vege_param_map(SL2P_2DNets, VP_Options, DS_Options, inImg, netID_map):
   #========================================================================================================
   # Stack the spectral band variables into a single DataArray
   #========================================================================================================
+  print('<estimate_VParams> the bands in DS options = ', DS_Options['inputBands'])
+  inImg = inImg[DS_Options['inputBands']]
+
   print('<estimate_VParams> the variables in the given image = ', inImg.data_vars)
   stacked_data = inImg.to_array(dim='band')
   
+  estimates = []
   for netID in range(nbClsNets):
-    estimates = [applyNet(stacked_data, one_param_nets, netID_map, netID)]
+    estimates.append(applyNet(stacked_data, one_param_nets, netID_map, netID))
   
   combined = xr.concat(estimates, dim='class_param')
 
@@ -353,6 +368,25 @@ def invalidOutput(estimate,netOptions):
 
 
 #############################################################################################################
+# Description: This function returns a sub netID_map clipped based on the spatial dimensions of 'inImg'
+#############################################################################################################
+def clip_netID_map(inImg, netID_map):
+  Img_dims = (inImg.dims['x'], inImg.dims['y'])
+  Map_dims = (netID_map.dims['x'], netID_map.dims['y'])
+
+  sub_netID_map = netID_map
+  if Img_dims != Map_dims:
+    #sub_netID_map = netID_map.sel(y=inImg['y'], x=inImg['x'])
+    sub_netID_map = netID_map.reindex_like(inImg, method='nearest')
+    #sub_netID_map = sub_netID_map.fillna(0)
+
+  #print('variables in sub_netID_map = ', sub_netID_map)
+
+  return sub_netID_map
+
+
+
+#############################################################################################################
 # Description: 
 #############################################################################################################
 def estimate_VParams(inParams, DS_Options, inImg, netID_map):
@@ -371,21 +405,15 @@ def estimate_VParams(inParams, DS_Options, inImg, netID_map):
   #==========================================================================================================
   # Clip 'netID_map' to match the spatial dimensions of the given image
   #==========================================================================================================
-  Img_dims = (inImg.dims['x'], inImg.dims['y'])
-  Map_dims = (netID_map.dims['x'], netID_map.dims['y'])
-
-  sub_netID_map = netID_map
-  if Img_dims != Map_dims:
-    sub_netID_map = netID_map.sel(x=inImg['x'], y=inImg['y'])
-  
+  sub_netID_map = clip_netID_map(inImg, netID_map)  
   print('variables in sub_netID_map = ', sub_netID_map)
 
   #==========================================================================================================
   # Loop through each vegetation parameter
   #==========================================================================================================  
-  coords       = {coord: inImg.coords[coord] for coord in ['x', 'y']}
-  out_veg_maps = xr.Dataset(coords=coords)
+  #coords       = {coord: inImg.coords[coord] for coord in ['x', 'y']}  
   date_img     = inImg[eoIM.pix_date]
+  out_veg_maps = xr.Dataset({eoIM.pix_date: date_img})
   inImg        = inImg.drop_vars([eoIM.pix_date]) 
 
   for param_name in inParams['prod_names']:
@@ -405,7 +433,7 @@ def estimate_VParams(inParams, DS_Options, inImg, netID_map):
   print('Done')
   '''
 
-  return out_veg_maps, date_img
+  return out_veg_maps
 
 
 

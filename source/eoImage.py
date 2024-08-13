@@ -725,8 +725,23 @@ def xrDS_spatial_match(Refer_xrDs, Source_xrDS, Flip_Y = True):
 
 
 
+#############################################################################################################
+# Description: This function applys the given 'gain' and 'offset' to selected bands/variables in 'inImg' and 
+#              then returns the modified xarray.dataset object.
+#  
+# Revision history:  2024-Aug-13  Lixin Sun  Initial creation
+#
+#############################################################################################################
+def rescale_spec_bands(inImg, selected_vars, gain, offset):
+  img_vars = inImg.data_vars
+  if len(selected_vars) < 1:
+    selected_vars = img_vars
 
+  if set(selected_vars) <= set(img_vars):
+    for var in selected_vars:
+      inImg[var] = inImg[var]*gain + offset
 
+  return inImg
 
 
 #test_img = read_geotiff('C:\\Work_documents\\Canada_LC_2020_30m.tif', OutName='test_band')

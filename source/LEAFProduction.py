@@ -5,6 +5,7 @@ import xarray as xr
 import odc.stac
 
 from datetime import datetime
+import concurrent.futures
 
 import eoImage as eoIM
 import eoMosaic as eoMz
@@ -107,6 +108,7 @@ def LEAF_base_image(Params, Region, ProjStr, Scale, Criteria):
 
 
 
+
 #############################################################################################################
 # Description: This function produces all the required vegetation parameter maps for ONE tile and ONE month.
 # 
@@ -120,7 +122,8 @@ def create_LEAF_maps(inParams):
   '''
     Args:
       inParams(dictionary): A dictionary containing all necessary execution parameters.'''
-    
+  
+  leaf_start = time.time()
   #==========================================================================================================
   # Validate input parameters
   #==========================================================================================================
@@ -178,33 +181,36 @@ def create_LEAF_maps(inParams):
   def estimate_one_tile_params(tileName, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale, inParams, DS_Options, netID_map):
     one_tile_items  = eoMz.get_one_tile_items(stac_items, tileName)  # Extract a list of stac items based on an unique tile name       
     one_tile_mosaic = eoMz.get_tile_submosaic(SsrData, one_tile_items, StartStr, EndStr, criteria['bands'], ProjStr, Scale, eoIM.EXTRA_ANGLE)
+    #eoMz.export_mosaic(inParams, one_tile_mosaic)
+    one_tile_mosaic = eoIM.rescale_spec_bands(one_tile_mosaic, SsrData['LEAF_BANDS'], 0.01, 0)
 
     if one_tile_mosaic is not None:
       max_spec_val    = xr.apply_ufunc(np.maximum, one_tile_mosaic[SsrData['GRN']], one_tile_mosaic[SsrData['NIR']])
-      one_tile_mosaic = one_tile_mosaic.where(max_spec_val > 0)
+      one_tile_mosaic = one_tile_mosaic.where(max_spec_val > 0)      
 
       one_tile_params = SL2P_NetsTools.estimate_VParams(inParams, DS_Options, one_tile_mosaic, netID_map)    
-    
+      eoMz.export_mosaic(inParams, one_tile_params)
+
     return one_tile_params
   
-  estimate_one_tile_params(unique_tiles[0], stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale, inParams, DS_Options, netID_map)
-
-  ''' 
+  #estimate_one_tile_params(unique_tiles[3], stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale, inParams, DS_Options, netID_map)
+  
   with concurrent.futures.ThreadPoolExecutor() as executor:
-    futures = [executor.submit(mosaic_one_tile, tile, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale, ExtraBands) for tile in unique_tiles]    
+    futures = [executor.submit(estimate_one_tile_params, tile, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale, inParams, DS_Options, netID_map) for tile in unique_tiles]
     count = 0
     for future in concurrent.futures.as_completed(futures):
-      one_tile_mosaic = future.result()
-      if one_tile_mosaic is not None:
-        base_img = base_img.combine_first(one_tile_mosaic)        
+      one_tile_param = future.result()
+      if one_tile_param is not None:
+        base_img = base_img.combine_first(one_tile_param)        
         count += 1
       
       print('\n<<<<<<<<<< Complete %2dth sub mosaic >>>>>>>>>'%(count))
-  '''
-
+  
   leaf_stop = time.time()
   leaf_time = (leaf_stop - leaf_start)/60
   print('\n\n<<<<<<<<<< The total elapsed time for generating the mosaic = %6.2f minutes>>>>>>>>>'%(leaf_time))  
+  
+  eoMz.export_mosaic(inParams, base_img)
 
   return base_img
 
@@ -377,10 +383,10 @@ params = {
     'year': 2022,                # An integer representing image acquisition year
     'nbYears': -1,               # positive int for annual product, or negative int for monthly product
     'months': [6],               # A list of integers represening one or multiple monthes     
-    'tile_names': ['tile42_911'], # A list of (sub-)tile names (defined using CCRS' tile griding system) 
+    'tile_names': ['tile42_922'], # A list of (sub-)tile names (defined using CCRS' tile griding system) 
     'prod_names': ['LAI', 'fCOVER'],    #['mosaic', 'LAI', 'fCOVER', ]    
-    'resolution': 200,            # Exporting spatial resolution    
-    'out_folder': 'C:/Work_documents/test_xr_tile55_411_2021_200m',  # the folder name for exporting
+    'resolution': 100,            # Exporting spatial resolution    
+    'out_folder': 'C:/Work_documents/test_xr_tile42_922_2022_100m',  # the folder name for exporting
     'projection': 'EPSG:3979'   
     
     #'start_date': '2022-06-15',
@@ -392,7 +398,7 @@ leaf_params = eoPM.get_LEAF_params(params)
 
 leaf_maps = create_LEAF_maps(leaf_params)
 
-# export_mosaic(params, mosaic)
+
 
 
 
