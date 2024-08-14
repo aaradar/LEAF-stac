@@ -14,7 +14,6 @@ import eoParams as eoPM
 import eoTileGrids as eoTG
 import eoAuxData as eoAD
 
-
 import SL2P_V1
 import SL2P_NetsTools
 
@@ -23,7 +22,7 @@ import SL2P_NetsTools
 
 #############################################################################################################
 # Description: This function creates an empty vegetation parameter image (xarray.dataset object) that 
-#              includes necessary bands for storing all vegetation parameters
+#              includes necessary bands for storing all vegetation parameter maps.
 #
 # Revision history:  2024-Aug-02  Lixin Sun  Initial creation
 #
@@ -47,11 +46,6 @@ def LEAF_base_image(Params, Region, ProjStr, Scale, Criteria):
 
   print(f"<LEAF_base_image> A total of {len(stac_items):d} items were found.")
   eoMz.display_meta_assets(stac_items)
-
-  #==========================================================================================================
-  # Obtain a list of STAC items that cover the entire ROI and were acquired during a time window  
-  #==========================================================================================================
-  #unique_items = eoMz.get_unique_STAC_items(Region, Criteria)
 
   #==========================================================================================================
   # Ingest imaging geometry angles into each STAC item
@@ -121,7 +115,7 @@ def LEAF_base_image(Params, Region, ProjStr, Scale, Criteria):
 def create_LEAF_maps(inParams):
   '''
     Args:
-      inParams(dictionary): A dictionary containing all necessary execution parameters.'''
+      inParams(dictionary): A dictionary containing all execution parameters.'''
   
   leaf_start = time.time()
   #==========================================================================================================
@@ -152,33 +146,33 @@ def create_LEAF_maps(inParams):
   criteria = eoMz.get_query_conditions(SsrData, StartStr, EndStr)
 
   #==========================================================================================================
-  # Create a base image that has full spatial coverage to ROI and includes all necessary bands, such as 
+  # Create an empty vegetation parameetr map that covers entire ROI and includes all necessary bands, such as 
   # all vegetation parameters, pixel date and pixel quality.
   #==========================================================================================================
-  base_img, stac_items, used_time = LEAF_base_image(inParams, Region, ProjStr, Scale, criteria)
+  entire_map, stac_items, used_time = LEAF_base_image(inParams, Region, ProjStr, Scale, criteria)
   
-  print('\n<create_LEAF_maps> based mosaic image = ', base_img)
-  print('\n<<<<<<<<<< Complete generating base image, elapsed time = %6.2f minutes>>>>>>>>>'%(used_time))  
+  print('\n<create_LEAF_maps> the empty entire veg parameter map = ', entire_map)
+  print('\n<<< elapsed time for generating an empty entire veg parameter map = %6.2f minutes>>>'%(used_time))  
 
   #==========================================================================================================
-  # Read and clip land cover map based on the spatial extent of "base_img"
+  # (1) Read and clip land cover map based on the spatial extent of "entire_map"
+  # (2) Create a network ID map with the same spatial dimensions as clipped landcover map
   #==========================================================================================================  
-  sub_LC_map = eoAD.get_local_CanLC('F:\\Canada_LC2020\\Canada_LC_2020_30m.tif', base_img)
+  sub_LC_map = eoAD.get_local_CanLC('F:\\Canada_LC2020\\Canada_LC_2020_30m.tif', entire_map)
 
-  DS_Options = SL2P_V1.make_DS_options('sl2p_nets', SsrData)
+  DS_Options = SL2P_V1.make_DS_options('sl2p_nets', SsrData)  
+  netID_map  = SL2P_NetsTools.makeIndexLayer(sub_LC_map, DS_Options)
   
-  netID_map = SL2P_NetsTools.makeIndexLayer(sub_LC_map, DS_Options)
-  
-  #sub_LC_map.to_netcdf('test_LC_map') 
-  #netID_map.to_netcdf('test_netID_map')
+  #==========================================================================================================
+  # Get a list of unique granule names
+  #==========================================================================================================
+  unique_granules = eoMz.get_unique_tile_names(stac_items)  #Get all unique tile names  
+  print('\n<<< The number of unique granule names = %d>>>'%(len(unique_granules)))   
 
   #==========================================================================================================
-  # Get a list of unique tile names and then loop through each unique tile to generate submosaic 
-  #==========================================================================================================  
-  unique_tiles = eoMz.get_unique_tile_names(stac_items)  #Get all unique tile names  
-  print('\n<<<<<< The number of unique tiles = %d >>>>>>>'%(len(unique_tiles)))   
-
-  def estimate_one_tile_params(tileName, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale, inParams, DS_Options, netID_map):
+  # Define a function that can produce vegetation parameter maps for ONE granule
+  #==========================================================================================================
+  def estimate_granule_params(tileName, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale, inParams, DS_Options, netID_map):
     one_tile_items  = eoMz.get_one_tile_items(stac_items, tileName)  # Extract a list of stac items based on an unique tile name       
     one_tile_mosaic = eoMz.get_tile_submosaic(SsrData, one_tile_items, StartStr, EndStr, criteria['bands'], ProjStr, Scale, eoIM.EXTRA_ANGLE)
     #eoMz.export_mosaic(inParams, one_tile_mosaic)
@@ -194,25 +188,30 @@ def create_LEAF_maps(inParams):
     return one_tile_params
   
   #estimate_one_tile_params(unique_tiles[3], stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale, inParams, DS_Options, netID_map)
-  
+  #==========================================================================================================
+  # Parallelly loop through each granule to produce vegetation parameter sub-maps, and then merge them into
+  # 'entire_map'
+  #==========================================================================================================
   with concurrent.futures.ThreadPoolExecutor() as executor:
-    futures = [executor.submit(estimate_one_tile_params, tile, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale, inParams, DS_Options, netID_map) for tile in unique_tiles]
+    futures = [executor.submit(estimate_granule_params, tile, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale, inParams, DS_Options, netID_map) for tile in unique_granules]
     count = 0
     for future in concurrent.futures.as_completed(futures):
       one_tile_param = future.result()
       if one_tile_param is not None:
-        base_img = base_img.combine_first(one_tile_param)        
+        entire_map = entire_map.combine_first(one_tile_param)        
         count += 1
       
-      print('\n<<<<<<<<<< Complete %2dth sub mosaic >>>>>>>>>'%(count))
-  
+      print('\n<<< Complete production for %2dth granule >>>'%(count))
+
+  #==========================================================================================================
+  # Display the elapsed time for entire process
+  #==========================================================================================================
   leaf_stop = time.time()
   leaf_time = (leaf_stop - leaf_start)/60
-  print('\n\n<<<<<<<<<< The total elapsed time for generating the mosaic = %6.2f minutes>>>>>>>>>'%(leaf_time))  
-  
-  eoMz.export_mosaic(inParams, base_img)
+  print('\n\n<<< The elapsed time for generating one monthly tile product = %6.2f minutes>>>'%(leaf_time))
 
-  return base_img
+  return entire_map
+
 
 
 
@@ -289,21 +288,22 @@ def SL2P_estimation(Params):
 
 
 #############################################################################################################
-# Description: Produces vegetation parameter maps for one or multiple tiles within CANADA
+# Description: This function can be used to produce monthly vegetation parameter maps for one or multiple 
+#              tiles within Canada.
 # 
 # Revision history:  2024-Aug-01  Lixin Sun  Initial creation 
 #
 #############################################################################################################
 def tile_LEAF_production(Params):
-  '''Produces LEAF products for one or multiple tiles in CANADA
+  '''Produces monthly vegetation parameter maps for one or multiple tiles within Canada.
 
     Args:
-       Params(dictionary): A dictionary storing all necessary parameters for an execution.'''  
+       Params(dictionary): A dictionary containing all necessary execution parameters.'''  
   
   #==========================================================================================================
   # Validate some input parameters
   #==========================================================================================================
-  all_keys  = Params.keys()    
+  all_keys  = Params.keys()
   all_valid = True if 'tile_names' in all_keys and 'months' in all_keys and 'year' in all_keys else False
   
   if all_valid == False:
@@ -324,7 +324,8 @@ def tile_LEAF_production(Params):
       Params['current_month'] = month
       Params['time_str']      = eoIM.get_MonthName(int(month))
 
-      # Produce vegetation parameter maps and export them in a specified way (a compact image or separate images)      
+      # Produce monthly/seasonal vegetation parameter maps and export them in a specified way
+      # (a compact image or separate images)      
       out_style = str(Params['export_style']).lower()
       if out_style.find('comp') > -1:
         print('\n<tile_LEAF_production> Generate and export biophysical maps in one file .......')
@@ -334,30 +335,39 @@ def tile_LEAF_production(Params):
         #export_compact_params(fun_Param_dict, region, out_params, task_list)
 
       else: 
-        # Produce and export monthly or seasonal biophysical parameetr maps
+        # Produce and export monthly/seasonal vegetation parameetr maps
         print('\n<tile_LEAF_production> Generate and export separate biophysical maps......')        
-        create_LEAF_maps(Params)
-        
+        one_product = create_LEAF_maps(Params)
+      
+        # Export results for ONE tile and ONE month/season
+        eoMz.export_mosaic(Params, one_product)
+
 
 
 
 
 
 #############################################################################################################
+# Description: This is the main fuction that can produce vegetation parameter maps according to a given
+#              execution parameter dictionary.
+# 
+# Revision history:  2024-Jul-30  Lixin Sun  Initial creation
+#
+#############################################################################################################
 def LEAF_production(inExeParams):
   '''Produces monthly biophysical parameter maps for a number of tiles and months.
 
      Args:
-       ExeParamDict(Python Dictionary): A Python dictionary storing all input parameters for one execution.'''
+       inExeParams(Python Dictionary): A Python dictionary containing all input parameters for one execution.'''
 
   #==========================================================================================================
-  # Standardize the given execution parameters
+  # Standardize the execution parameters so that they are applicable for producing vegetation parameter maps
   #==========================================================================================================
   Params = eoPM.get_LEAF_params(inExeParams)
   print('<LEAF_production> All input parameters = ', Params) 
 
   #==========================================================================================================
-  # Deal with three scenarios: customized spatial region, customized compositing period and regular tile 
+  # Deal with customized region/time period and regular tile 
   #==========================================================================================================
   if eoPM.is_custom_region(Params) == True or eoPM.is_custom_window(Params) == True:   
     # There is a customized spatial region specified in Parameter dictionary 
@@ -395,44 +405,4 @@ def LEAF_production(inExeParams):
 
 
 # leaf_params = eoPM.get_LEAF_params(params)
-
 # leaf_maps = create_LEAF_maps(leaf_params)
-
-
-
-
-
-'''
-import xarray as xr
-import numpy as np
-
-# Create a sample xarray.Dataset with float32 data
-data = np.random.rand(4, 3).astype(np.float32) * 100  # Example data, scaled to [0, 100]
-dataset = xr.Dataset(
-    {
-        "variable1": (["x", "y"], data),
-        "variable2": (["x", "y"], data),
-    },
-    coords={
-        "x": np.arange(4),
-        "y": np.arange(3)
-    }
-)
-
-# Print the original dataset and data type
-print("Original Dataset:")
-print(dataset)
-print("Original Data Type of 'variable1':", dataset["variable1"].dtype)
-
-# Optional: Rescale the data to [0, 255] if necessary
-# Assuming the original data range is [0, 100], we rescale it to [0, 255]
-#dataset["variable1"] = (dataset["variable1"] - dataset["variable1"].min()) / (dataset["variable1"].max() - dataset["variable1"].min()) * 255
-
-# Convert the data type to uint8
-dataset["variable1"] = dataset["variable1"].astype(np.uint8)
-
-# Print the modified dataset and data type
-print("\nModified Dataset:")
-print(dataset)
-print("Modified Data Type of 'variable1':", dataset["variable1"].dtype)
-'''
