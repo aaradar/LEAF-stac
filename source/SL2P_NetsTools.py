@@ -403,10 +403,10 @@ def estimate_VParams(inParams, DS_Options, inImg, netID_map):
       QC_img    = np.bitwise_or(QC_img, QC_output)
 
       #outDF['error'+v_param] = one_vege_param_map(errorsSL2P_2DNets,   VP_Options, DS_Options, inImg, cliped_netID_map)
-  
+
   out_veg_maps[eoIM.pix_QA] = xr.DataArray(data=QC_img, dims=['y', 'x'])
 
-  return out_veg_maps
+  return out_veg_maps.where(date_img > 0)
 
 
 
