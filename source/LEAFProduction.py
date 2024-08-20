@@ -159,7 +159,7 @@ def create_LEAF_maps(inParams):
   # (1) Read and clip land cover map based on the spatial extent of "entire_map"
   # (2) Create a network ID map with the same spatial dimensions as clipped landcover map
   #==========================================================================================================  
-  sub_LC_map = eoAD.get_local_CanLC('C:\\Work_documents\\Canada_LC_2020_30m.tif', entire_map)
+  sub_LC_map = eoAD.get_local_CanLC('F:\\Canada_LC2020\\Canada_LC_2020_30m.tif', entire_map)
 
   DS_Options = SL2P_V1.make_DS_options('sl2p_nets', SsrData)  
   netID_map  = SL2P_NetsTools.makeIndexLayer(sub_LC_map, DS_Options)
@@ -188,13 +188,13 @@ def create_LEAF_maps(inParams):
 
     return one_tile_params
   
-  return estimate_granule_params(unique_granules[3], stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale, inParams, DS_Options, netID_map)
+  #return estimate_granule_params(unique_granules[3], stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale, inParams, DS_Options, netID_map)
 
   #==========================================================================================================
   # Parallelly loop through each granule to produce vegetation parameter sub-maps, and then merge them into
   # 'entire_map'
   #==========================================================================================================
-  with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+  with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
     futures = [executor.submit(estimate_granule_params, tile, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale, inParams, DS_Options, netID_map) for tile in unique_granules]
     count = 0
     for future in concurrent.futures.as_completed(futures):
@@ -461,13 +461,13 @@ def LEAF_production(inExeParams):
 params = {
     'sensor': 'S2_SR',           # A sensor type string (e.g., 'S2_SR' or 'L8_SR' or 'MOD_SR')
     'unit': 2,                   # A data unit code (1 or 2 for TOA or surface reflectance)    
-    'year': 2024,                # An integer representing image acquisition year
+    'year': 2023,                # An integer representing image acquisition year
     'nbYears': -1,               # positive int for annual product, or negative int for monthly product
-    'months': [7],               # A list of integers represening one or multiple monthes     
+    'months': [8],               # A list of integers represening one or multiple monthes     
     'tile_names': ['tile55_922'],    # A list of (sub-)tile names (defined using CCRS' tile griding system) 
-    'prod_names': ['LAI', 'fCOVER'],    #['mosaic', 'LAI', 'fCOVER', ]    
-    'resolution': 100,            # Exporting spatial resolution    
-    'out_folder': 'C:/Work_documents/LEAF_tile55_922_2024_100m',  # the folder name for exporting
+    'prod_names': ['LAI', 'fCOVER', 'fAPAR', 'Albedo'],    #['mosaic', 'LAI', 'fCOVER', ]    
+    'resolution': 200,            # Exporting spatial resolution    
+    'out_folder': 'C:/Work_documents/LEAF_tile55_922_2023_200m',  # the folder name for exporting
     'projection': 'EPSG:3979'   
     
     #'start_date': '2022-06-15',
