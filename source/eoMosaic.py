@@ -428,7 +428,7 @@ def get_base_Image(Region, ProjStr, Scale, Criteria):
   #==========================================================================================================
   # Load the first image based on the boundary box of ROI
   #==========================================================================================================
-  Bbox = eoUs.get_region_bbox(Region)
+  Bbox = eoUs.get_region_bbox(Region, ProjStr)
   print('<get_base_Image> The bbox of the given region = ', Bbox)
 
   ds_xr = odc.stac.load([stac_items[0]],
@@ -684,7 +684,7 @@ def get_spec_score(SsrData, inImg, median_blu, median_nir):
 #                    2024-Jul-05  Lixin Sun  Added imaging angle bands to each item/image 
 #
 #############################################################################################################
-def get_tile_submosaic(SsrData, TileItems, StartStr, EndStr, Bands, ProjStr, Scale, ExtraBandCode):
+def get_tile_submosaic(SsrData, TileItems, StartStr, EndStr, Bands, BaseBBox, ProjStr, Scale, ExtraBandCode):
   '''
      Args:
        SsrData(Dictionary): Some meta data on a used satellite sensor;
@@ -708,6 +708,11 @@ def get_tile_submosaic(SsrData, TileItems, StartStr, EndStr, Bands, ProjStr, Sca
     return None
   
   xrDS = xr.concat(successful_items, dim='time')
+  
+  #==========================================================================================================
+  # Clip the 'xrDS' based on 'BaseBBox', which is the bbox of final product
+  #==========================================================================================================
+  xrDS = xrDS.sel(x=slice(BaseBBox[0], BaseBBox[2]), y=slice(BaseBBox[3], BaseBBox[1]))
 
   #==========================================================================================================
   # 
@@ -722,8 +727,7 @@ def get_tile_submosaic(SsrData, TileItems, StartStr, EndStr, Bands, ProjStr, Sca
   # Actually load all data from a lazy-loaded dataset into in-memory Numpy arrays
   #==========================================================================================================
   # with ddiag.ProgressBar():
-  #   xrDS.load()
-   
+  #   xrDS.load()   
 
   print('\n<get_tile_submosaic> loaded xarray dataset:\n', xrDS) 
 
@@ -829,6 +833,8 @@ def period_mosaic(inParams, ExtraBands):
   
   print('\n<period_mosaic> based mosaic image = ', base_img)
   print('\n<<<<<<<<<< Complete generating base image, elapsed time = %6.2f minutes>>>>>>>>>'%(used_time))  
+  
+  base_bbox = eoUs.get_region_bbox(Region, ProjStr)
 
   #==========================================================================================================
   # Get a list of unique tile names and then loop through each unique tile to generate submosaic 
@@ -836,10 +842,10 @@ def period_mosaic(inParams, ExtraBands):
   unique_tiles = get_unique_tile_names(stac_items)  #Get all unique tile names  
   print('\n<<<<<< The number of unique tiles = %d >>>>>>>'%(len(unique_tiles))) 
 
-  def mosaic_one_tile(tile, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale, ExtraBands):
+  def mosaic_one_tile(tile, stac_items, SsrData, StartStr, EndStr, criteria, base_bbox, ProjStr, Scale, ExtraBands):
     one_tile_items  = get_one_tile_items(stac_items, tile)  # Extract a list of items based on an unique tile name
     filtered_items  = get_unique_STAC_items(one_tile_items)
-    one_tile_mosaic = get_tile_submosaic(SsrData, filtered_items, StartStr, EndStr, criteria['bands'], ProjStr, Scale, ExtraBands)
+    one_tile_mosaic = get_tile_submosaic(SsrData, filtered_items, StartStr, EndStr, criteria['bands'], base_bbox, ProjStr, Scale, ExtraBands)
 
     if one_tile_mosaic is not None:
       max_spec_val    = xr.apply_ufunc(np.maximum, one_tile_mosaic[SsrData['BLU']], one_tile_mosaic[SsrData['NIR']])

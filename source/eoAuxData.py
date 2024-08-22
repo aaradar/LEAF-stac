@@ -36,7 +36,7 @@ def get_CanLC(inYear, Region, Resolution, Projection):
                         bands  = ['classification'],
                         chunks = {'x': 1000, 'y': 1000},
                         crs    = Projection, 
-                        bbox   = eoUs.get_region_bbox(Region),
+                        bbox   = eoUs.get_region_bbox(Region, Projection),
                         fail_on_error = False,
                         resolution = Resolution)
   

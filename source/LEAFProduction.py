@@ -93,6 +93,14 @@ def LEAF_base_image(Params, Region, ProjStr, Scale, Criteria):
   out_xrDS[eoIM.pix_QA]   = new_DataArray
   
   out_xrDS = out_xrDS.drop_vars(band1)
+
+  #==========================================================================================================
+  # Clip the base image using a bbox with coordinates in the same CRS system as 'out_xrDS'
+  #==========================================================================================================
+  img_bbox = eoUs.get_region_bbox(Region, ProjStr)
+
+  out_xrDS = out_xrDS.sel(x=slice(img_bbox[0], img_bbox[2]), y=slice(img_bbox[3], img_bbox[1]))
+
   #==========================================================================================================
   # Mask out all the pixels so that they can be treated as gap/missing pixels
   #==========================================================================================================  
@@ -154,7 +162,7 @@ def create_LEAF_maps(inParams):
   # all vegetation parameters, pixel date and pixel quality.
   #==========================================================================================================
   entire_map, stac_items, used_time = LEAF_base_image(inParams, Region, ProjStr, Scale, criteria)
-  
+
   print('\n<create_LEAF_maps> the empty entire veg parameter map = ', entire_map)
   print('\n<<< elapsed time for generating an empty entire veg parameter map = %6.2f minutes>>>'%(used_time))  
 
@@ -162,8 +170,8 @@ def create_LEAF_maps(inParams):
   # (1) Read and clip land cover map based on the spatial extent of "entire_map"
   # (2) Create a network ID map with the same spatial dimensions as clipped landcover map
   #==========================================================================================================  
-  sub_LC_map = eoAD.get_local_CanLC('F:\\Canada_LC2020\\Canada_LC_2020_30m.tif', entire_map) # for workstation at Observatory
-  #sub_LC_map = eoAD.get_local_CanLC('C:\\Work_documents\\Canada_LC_2020_30m.tif', entire_map) # for work laptop
+  #sub_LC_map = eoAD.get_local_CanLC('F:\\Canada_LC2020\\Canada_LC_2020_30m.tif', entire_map) # for workstation at Observatory
+  sub_LC_map = eoAD.get_local_CanLC('C:\\Work_documents\\Canada_LC_2020_30m.tif', entire_map) # for work laptop
 
   DS_Options = SL2P_V1.make_DS_options('sl2p_nets', SsrData)  
   netID_map  = SL2P_NetsTools.makeIndexLayer(sub_LC_map, DS_Options)
@@ -174,32 +182,35 @@ def create_LEAF_maps(inParams):
   unique_granules = eoMz.get_unique_tile_names(stac_items)  #Get all unique tile names  
   print('\n<<< The number of unique granule names = %d>>>'%(len(unique_granules)))   
 
+  base_bbox = eoUs.get_region_bbox(Region, ProjStr)
+    
   #==========================================================================================================
   # Define a function that can produce vegetation parameter maps for ONE granule
   #==========================================================================================================
-  def estimate_granule_params(tileName, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale, inParams, DS_Options, netID_map):
+  def estimate_granule_params(tileName, stac_items, SsrData, StartStr, EndStr, criteria, base_bbox, ProjStr, Scale, inParams, DS_Options, netID_map):
     one_tile_items  = eoMz.get_one_tile_items(stac_items, tileName)  # Extract a list of stac items based on an unique tile name       
-    one_tile_mosaic = eoMz.get_tile_submosaic(SsrData, one_tile_items, StartStr, EndStr, criteria['bands'], ProjStr, Scale, eoIM.EXTRA_ANGLE)
-    #eoMz.export_mosaic(inParams, one_tile_mosaic)
-    one_tile_mosaic = eoIM.rescale_spec_bands(one_tile_mosaic, SsrData['LEAF_BANDS'], 0.01, 0)
+    one_tile_mosaic = eoMz.get_tile_submosaic(SsrData, one_tile_items, StartStr, EndStr, criteria['bands'], base_bbox, ProjStr, Scale, eoIM.EXTRA_ANGLE)
+    #eoMz.export_mosaic(inParams, one_tile_mosaic)    
 
-    if one_tile_mosaic is not None:
+    if one_tile_mosaic is not None and one_tile_mosaic.x.size > 0 and one_tile_mosaic.y.size > 0:
+      one_tile_mosaic = eoIM.rescale_spec_bands(one_tile_mosaic, SsrData['LEAF_BANDS'], 0.01, 0)
       max_spec_val    = xr.apply_ufunc(np.maximum, one_tile_mosaic[SsrData['GRN']], one_tile_mosaic[SsrData['NIR']])
       one_tile_mosaic = one_tile_mosaic.where(max_spec_val > 0)      
-
+    
       one_tile_params = SL2P_NetsTools.estimate_VParams(inParams, DS_Options, one_tile_mosaic, netID_map)    
       #eoMz.export_mosaic(inParams, one_tile_params)
-
-    return one_tile_params
+      return one_tile_params
+    else:
+      return None
   
-  return estimate_granule_params(unique_granules[3], stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale, inParams, DS_Options, netID_map)
+  #return estimate_granule_params(unique_granules[3], stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale, inParams, DS_Options, netID_map)
 
   #==========================================================================================================
   # Parallelly loop through each granule to produce vegetation parameter sub-maps, and then merge them into
   # 'entire_map'
   #==========================================================================================================
   with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-    futures = [executor.submit(estimate_granule_params, tile, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale, inParams, DS_Options, netID_map) for tile in unique_granules]
+    futures = [executor.submit(estimate_granule_params, tile, stac_items, SsrData, StartStr, EndStr, criteria, base_bbox, ProjStr, Scale, inParams, DS_Options, netID_map) for tile in unique_granules]
     count = 0
     for future in concurrent.futures.as_completed(futures):
       one_tile_param = future.result()
@@ -462,11 +473,11 @@ params = {
     'unit': 2,                   # A data unit code (1 or 2 for TOA or surface reflectance)    
     'year': 2023,                # An integer representing image acquisition year
     'nbYears': -1,               # positive int for annual product, or negative int for monthly product
-    'months': [-1],               # A list of integers represening one or multiple monthes     
-    'tile_names': ['tile55_922'],    # A list of (sub-)tile names (defined using CCRS' tile griding system) 
+    'months': [8],               # A list of integers represening one or multiple monthes     
+    'tile_names': ['tile55'],    # A list of (sub-)tile names (defined using CCRS' tile griding system) 
     'prod_names': ['LAI', 'fCOVER'],    #['mosaic', 'LAI', 'fCOVER', ]    
-    'resolution': 400,            # Exporting spatial resolution    
-    'out_folder': 'C:/Work_documents/LEAF_tile55_922_2023_summer_400m',  # the folder name for exporting
+    'resolution': 200,            # Exporting spatial resolution    
+    'out_folder': 'C:/Work_documents/LEAF_tile55_922_2023_200m',  # the folder name for exporting
     'projection': 'EPSG:3979'   
     
     #'start_date': '2022-06-15',
