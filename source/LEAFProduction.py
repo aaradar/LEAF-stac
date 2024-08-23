@@ -48,7 +48,7 @@ def LEAF_base_image(Params, Region, ProjStr, Scale, Criteria):
   #==========================================================================================================  
   stac_items = eoMz.search_STAC_Catalog(Region, Criteria, 100, True)
 
-  print(f"<LEAF_base_image> A total of {len(stac_items):d} items were found.")
+  print(f"\n<LEAF_base_image> A total of {len(stac_items):d} items were found.\n")
   eoMz.display_meta_assets(stac_items)
 
   #==========================================================================================================
@@ -60,19 +60,19 @@ def LEAF_base_image(Params, Region, ProjStr, Scale, Criteria):
   #==========================================================================================================
   # Load the first image based on the boundary box of ROI
   #==========================================================================================================
-  Bbox = eoUs.get_region_bbox(Region)
-  print('<get_base_Image> The bbox of the given region = ', Bbox)
+  LatLon_bbox = eoUs.get_region_bbox(Region)
   
   band1 = Criteria['bands'][0]
   ds_xr = odc.stac.load([stac_items[0]],
                         bands  = [band1],
                         chunks = {'x': 1000, 'y': 1000},
                         crs    = ProjStr, 
-                        bbox   = Bbox,
+                        bbox   = LatLon_bbox,
                         fail_on_error = False,
                         resolution = Scale)
   
   # actually load data into memory  
+  #with ddiag.ProgressBar():
   ds_xr.load()
   out_xrDS = ds_xr.isel(time=0)    
   
@@ -80,26 +80,26 @@ def LEAF_base_image(Params, Region, ProjStr, Scale, Criteria):
   # Duplicate bands for different vegetation parameters
   #==========================================================================================================  
   out_xrDS      = out_xrDS*0
-  new_DataArray = (out_xrDS[band1]).astype(np.uint8)
+  new_DataArray = (out_xrDS[band1])
   
   if nVPs > 1:
     for i in range(nVPs):
-      out_xrDS[VP_names[i]] = new_DataArray
+      out_xrDS[VP_names[i]] = new_DataArray.astype(np.uint8)
   
   #==========================================================================================================
   # Add two more variables/bands for storing pixel date and quality, respectively.
   #==========================================================================================================
-  out_xrDS[eoIM.pix_date] = new_DataArray
-  out_xrDS[eoIM.pix_QA]   = new_DataArray
+  out_xrDS[eoIM.pix_date] = new_DataArray.astype(np.uint16)
+  out_xrDS[eoIM.pix_QA]   = new_DataArray.astype(np.uint8)
   
-  out_xrDS = out_xrDS.drop_vars(band1)
+  out_xrDS = out_xrDS.drop_vars(band1)  #Drop the band that should not be included
 
   #==========================================================================================================
   # Clip the base image using a bbox with coordinates in the same CRS system as 'out_xrDS'
   #==========================================================================================================
-  img_bbox = eoUs.get_region_bbox(Region, ProjStr)
+  xy_bbox = eoUs.get_region_bbox(Region, ProjStr)
 
-  out_xrDS = out_xrDS.sel(x=slice(img_bbox[0], img_bbox[2]), y=slice(img_bbox[3], img_bbox[1]))
+  out_xrDS = out_xrDS.sel(x=slice(xy_bbox[0], xy_bbox[2]), y=slice(xy_bbox[3], xy_bbox[1]))
 
   #==========================================================================================================
   # Mask out all the pixels so that they can be treated as gap/missing pixels
@@ -182,22 +182,25 @@ def create_LEAF_maps(inParams):
   unique_granules = eoMz.get_unique_tile_names(stac_items)  #Get all unique tile names  
   print('\n<<< The number of unique granule names = %d>>>'%(len(unique_granules)))   
 
-  base_bbox = eoUs.get_region_bbox(Region, ProjStr)
+  #==========================================================================================================
+  # Obtain the bbox in projected CRS system (x and y, rather than Lat and Lon)
+  #==========================================================================================================
+  xy_bbox = eoUs.get_region_bbox(Region, ProjStr)
     
   #==========================================================================================================
   # Define a function that can produce vegetation parameter maps for ONE granule
   #==========================================================================================================
-  def estimate_granule_params(tileName, stac_items, SsrData, StartStr, EndStr, criteria, base_bbox, ProjStr, Scale, inParams, DS_Options, netID_map):
-    one_tile_items  = eoMz.get_one_tile_items(stac_items, tileName)  # Extract a list of stac items based on an unique tile name       
-    one_tile_mosaic = eoMz.get_tile_submosaic(SsrData, one_tile_items, StartStr, EndStr, criteria['bands'], base_bbox, ProjStr, Scale, eoIM.EXTRA_ANGLE)
+  def estimate_granule_params(tileName, stac_items, SsrData, StartStr, EndStr, criteria, xy_bbox, ProjStr, Scale, inParams, DS_Options, netID_map):
+    one_granule_items  = eoMz.get_one_granule_items(stac_items, tileName)  # Extract a list of stac items based on an unique tile name       
+    one_granule_mosaic = eoMz.get_granule_mosaic(SsrData, one_granule_items, StartStr, EndStr, criteria['bands'], xy_bbox, ProjStr, Scale, eoIM.EXTRA_ANGLE)
     #eoMz.export_mosaic(inParams, one_tile_mosaic)    
 
-    if one_tile_mosaic is not None and one_tile_mosaic.x.size > 0 and one_tile_mosaic.y.size > 0:
-      one_tile_mosaic = eoIM.rescale_spec_bands(one_tile_mosaic, SsrData['LEAF_BANDS'], 0.01, 0)
-      max_spec_val    = xr.apply_ufunc(np.maximum, one_tile_mosaic[SsrData['GRN']], one_tile_mosaic[SsrData['NIR']])
-      one_tile_mosaic = one_tile_mosaic.where(max_spec_val > 0)      
+    if one_granule_mosaic is not None and one_granule_mosaic.x.size > 0 and one_granule_mosaic.y.size > 0:
+      one_granule_mosaic = eoIM.rescale_spec_bands(one_granule_mosaic, SsrData['LEAF_BANDS'], 0.01, 0)
+      max_spec_val       = xr.apply_ufunc(np.maximum, one_granule_mosaic[SsrData['GRN']], one_granule_mosaic[SsrData['NIR']])
+      one_granule_mosaic = one_granule_mosaic.where(max_spec_val > 0)      
     
-      one_tile_params = SL2P_NetsTools.estimate_VParams(inParams, DS_Options, one_tile_mosaic, netID_map)    
+      one_tile_params = SL2P_NetsTools.estimate_VParams(inParams, DS_Options, one_granule_mosaic, netID_map)    
       #eoMz.export_mosaic(inParams, one_tile_params)
       return one_tile_params
     else:
@@ -209,8 +212,8 @@ def create_LEAF_maps(inParams):
   # Parallelly loop through each granule to produce vegetation parameter sub-maps, and then merge them into
   # 'entire_map'
   #==========================================================================================================
-  with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-    futures = [executor.submit(estimate_granule_params, tile, stac_items, SsrData, StartStr, EndStr, criteria, base_bbox, ProjStr, Scale, inParams, DS_Options, netID_map) for tile in unique_granules]
+  with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+    futures = [executor.submit(estimate_granule_params, tile, stac_items, SsrData, StartStr, EndStr, criteria, xy_bbox, ProjStr, Scale, inParams, DS_Options, netID_map) for tile in unique_granules]
     count = 0
     for future in concurrent.futures.as_completed(futures):
       one_tile_param = future.result()
