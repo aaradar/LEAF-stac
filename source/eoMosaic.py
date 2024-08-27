@@ -463,7 +463,7 @@ def get_base_Image(Region, ProjStr, Scale, Criteria):
   # Mask out all the pixels in each variable of "base_img", so they will treated as gap/missing pixels
   # This step is very import if "combine_first" function is used to merge granule mosaic into based image. 
   #==========================================================================================================
-  out_xrDS = out_xrDS*0
+  out_xrDS = out_xrDS*0 + -10000.0
   #out_xrDS = out_xrDS.where(out_xrDS > 0)
 
   stop_time = time.time() 
@@ -874,6 +874,12 @@ def period_mosaic(inParams):
         count += 1
       
       print('\n<<<<<<<<<< Complete %2dth sub mosaic >>>>>>>>>'%(count))
+
+  #==========================================================================================================
+  # Mask out the pixels with negative date value
+  #========================================================================================================== 
+  pix_date = base_img[eoIM.pix_date]
+  base_img = base_img.where(pix_date > 0)
 
   mosaic_stop = time.time()
   mosaic_time = (mosaic_stop - mosaic_start)/60
