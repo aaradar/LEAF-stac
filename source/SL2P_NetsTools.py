@@ -352,8 +352,8 @@ def estimate_VParams(inParams, DS_Options, inImg, netID_map):
     Args:
       inParams(Dictionary): A dictionary containing all required input parameters;      
       DS_Options(Dictionary): A dictionary containing options for a specific satellite sensor/dataset;
-      inImg(xarray.dataset): A image in xarray.dataset format and containing all required bands;
-      netID_map(xarray.dataset): A xarray.dataset containing network IDs for different pixels. '''
+      inImg(xarray.dataset): An xarray.dataset object containing all required inputs for veg parameter estimation;
+      netID_map(xarray.dataset): An xarray.dataset object containing network IDs for different pixels. '''
       
   #==========================================================================================================
   # Clip 'netID_map' to match the spatial dimensions of the given image (inImg)

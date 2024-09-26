@@ -448,7 +448,7 @@ def read_angleDB(DB_fullpath):
 #                    2024-Jul-17  Lixin Sun  Modified so that only unique and filtered STAC items will be
 #                                            returned 
 #############################################################################################################
-def get_base_Image(Region, ProjStr, Scale, Criteria):
+def get_base_Image(Region, ProjStr, Scale, Criteria, ExtraBandCode):
   '''
   '''
   start_time = time.time()
@@ -463,6 +463,13 @@ def get_base_Image(Region, ProjStr, Scale, Criteria):
   print(f"\n<get_unique_STAC_items> A total of {len(stac_items):d} items were found.\n")
   display_meta_assets(stac_items)
   
+  #==========================================================================================================
+  # Ingest imaging geometry angles into each STAC item
+  #==========================================================================================================
+  if int(ExtraBandCode) == eoIM.EXTRA_ANGLE:
+    stac_items, angle_time = ingest_Geo_Angles(stac_items)
+    print('\n The total elapsed time for ingesting angles = %6.2f minutes'%(angle_time))
+
   #==========================================================================================================
   # Load the first image based on the boundary box of ROI
   #==========================================================================================================
@@ -482,7 +489,6 @@ def get_base_Image(Region, ProjStr, Scale, Criteria):
   # actually load data into memory
   #with ddiag.ProgressBar():
   ds_xr.load()
-
   out_xrDS = ds_xr.isel(time=0)
 
   #==========================================================================================================
@@ -818,12 +824,10 @@ def get_granule_mosaic(SsrData, TileItems, StartStr, EndStr, Bands, ProjStr, Sca
   #==========================================================================================================
   # Attach an additional bands as necessary 
   #==========================================================================================================
-  #print('data variables of original dataset = ', mosaic)
-
   extra_code = int(ExtraBandCode)
   if extra_code == eoIM.EXTRA_ANGLE:
     mosaic = eoIM.attach_AngleBands(mosaic, TileItems)
-    mosaic = mosaic.drop_vars(['blue','scl'])    
+    #mosaic = mosaic.drop_vars(['blue','scl'])    
 
   #==========================================================================================================
   # Remove 'time_index' and 'score' variables from submosaic 
@@ -846,7 +850,7 @@ def get_granule_mosaic(SsrData, TileItems, StartStr, EndStr, Bands, ProjStr, Sca
 # Revision history:  2024-May-24  Lixin Sun  Initial creation
 #                    2024-Jul-20  Lixin Sun  Modified to generate the final composite image tile by tile.
 #############################################################################################################
-def period_mosaic(inParams):
+def period_mosaic(inParams, ExtraBandCode):
   '''
     Args:
       inParams(dictionary): A dictionary containing all necessary execution parameters.'''
@@ -873,7 +877,7 @@ def period_mosaic(inParams):
   #==========================================================================================================
   # Create a base image that has full spatial dimensions covering ROI
   #==========================================================================================================
-  base_img, stac_items, used_time = get_base_Image(Region, ProjStr, Scale, criteria)
+  base_img, stac_items, used_time = get_base_Image(Region, ProjStr, Scale, criteria, ExtraBandCode)
   
   print('\n<period_mosaic> based mosaic image = ', base_img)
   print('\n<<<<<<<<<< Complete generating base image, elapsed time = %6.2f minutes>>>>>>>>>'%(used_time))  
@@ -881,8 +885,9 @@ def period_mosaic(inParams):
   #==========================================================================================================
   # Get a list of unique tile names and then loop through each unique tile to generate submosaic 
   #==========================================================================================================  
-  unique_granules = get_unique_tile_names(stac_items)  #Get all unique tile names  
-  print('\n<<<<<< The number of unique tiles = %d >>>>>>>'%(len(unique_granules))) 
+  unique_granules = get_unique_tile_names(stac_items)  #Get all unique tile names 
+  print('\n<<<<<< The number of unique granule tiles = %d'%(len(unique_granules)))  
+  print('\n<<<<<< The unique granule tiles = ', unique_granules) 
 
   #==========================================================================================================
   # Obtain the bbox in projected CRS system (x and y, rather than Lat and Lon)
@@ -892,15 +897,16 @@ def period_mosaic(inParams):
   def mosaic_one_granule(granule_name, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale):
     one_granule_items  = get_one_granule_items(stac_items, granule_name)  # Extract a list of items based on an unique tile name
     filtered_items     = get_unique_STAC_items(one_granule_items) #Remain only one item from those that share the same timestamp
-    one_granule_mosaic = get_granule_mosaic(SsrData, filtered_items, StartStr, EndStr, criteria['bands'], ProjStr, Scale, eoIM.EXTRA_NONE)
+    one_granule_mosaic = get_granule_mosaic(SsrData, filtered_items, StartStr, EndStr, criteria['bands'], ProjStr, Scale, ExtraBandCode)
 
     if one_granule_mosaic is not None:
       #max_spec_val       = xr.apply_ufunc(np.maximum, one_granule_mosaic[SsrData['BLU']], one_granule_mosaic[SsrData['NIR']])     
       return one_granule_mosaic
     else:
       return None 
-    
-  #return mosaic_one_granule(unique_granules[10], stac_items, SsrData, StartStr, EndStr, criteria, xy_bbox, ProjStr, Scale)
+
+  #test_mosaic = mosaic_one_granule(unique_granules[10], stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale)
+  #return test_mosaic
   
   with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
     futures = [executor.submit(mosaic_one_granule, granule, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale) for granule in unique_granules]    
@@ -914,9 +920,8 @@ def period_mosaic(inParams):
           base_img[var] = base_img[var].where(~mask, granule_mosaic[var], True)
 
         #base_img = base_img.combine_first(granule_mosaic)        
-        count += 1
-      
-      print('\n<<<<<<<<<< Complete %2dth sub mosaic >>>>>>>>>'%(count))
+        count += 1      
+        print('\n<<<<<<<<<< Complete %2dth sub mosaic >>>>>>>>>'%(count))
 
   #==========================================================================================================
   # Mask out the pixels with negative date value
@@ -1003,17 +1008,17 @@ def export_mosaic(inParams, inMosaic):
 #     'year': 2023,                # An integer representing image acquisition year
 #     'nbYears': -1,               # positive int for annual product, or negative int for monthly product
 #     'months': [7],               # A list of integers represening one or multiple monthes     
-#     'tile_names': ['tile55_421'], # A list of (sub-)tile names (defined using CCRS' tile griding system) 
-#     'prod_names': ['mosaic'],    #['mosaic', 'LAI', 'fCOVER', ]    
+#     'tile_names': ['tile55_922'], # A list of (sub-)tile names (defined using CCRS' tile griding system) 
+#     'prod_names': ['LAI'],    #['mosaic', 'LAI', 'fCOVER', ]    
 #     'resolution': 200,            # Exporting spatial resolution    
-#     'out_folder': 'C:/Work_documents/mosaic_tile55_421_2023_Jul_200m',  # the folder name for exporting
+#     'out_folder': 'C:/Work_documents/mosaic_tile55_922_2023_Jul_200m',  # the folder name for exporting
 #     'projection': 'EPSG:3979'   
     
 #     #'start_date': '2022-06-15',
 #     #'end_date': '2022-09-15'
 # }
 
-# mosaic = period_mosaic(params)
+# mosaic = period_mosaic(params, eoIM.EXTRA_ANGLE)
 
 # export_mosaic(params, mosaic)
 

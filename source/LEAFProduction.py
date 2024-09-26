@@ -161,7 +161,7 @@ def create_LEAF_maps(inParams):
   # Create an empty vegetation parameetr map that covers entire ROI and includes all necessary bands, such as 
   # all vegetation parameters, pixel date and pixel quality.
   #==========================================================================================================
-  entire_map, stac_items, used_time = LEAF_base_image(inParams, Region, ProjStr, Scale, criteria)
+  entire_map, stac_items, used_time = LEAF_base_image(inParams, Region, ProjStr, Scale, criteria)  
 
   print('\n<create_LEAF_maps> the empty entire veg parameter map = ', entire_map)
   print('\n<<< elapsed time for generating an empty entire veg parameter map = %6.2f minutes>>>'%(used_time))  
@@ -182,17 +182,19 @@ def create_LEAF_maps(inParams):
   unique_granules = eoMz.get_unique_tile_names(stac_items)  #Get all unique tile names  
   print('\n<<< The number of unique granule names = %d>>>'%(len(unique_granules)))   
 
+  #one_granule_params = SL2P_NetsTools.estimate_VParams(inParams, DS_Options, one_granule_mosaic, netID_map)
+
   #==========================================================================================================
   # Obtain the bbox in projected CRS system (x and y, rather than Lat and Lon)
   #==========================================================================================================
-  xy_bbox = eoUs.get_region_bbox(Region, ProjStr)
+  #xy_bbox = eoUs.get_region_bbox(Region, ProjStr)
     
   #==========================================================================================================
   # Define a function that can produce vegetation parameter maps for ONE granule
   #==========================================================================================================
-  def estimate_granule_params(tileName, stac_items, SsrData, StartStr, EndStr, criteria, xy_bbox, ProjStr, Scale, inParams, DS_Options, netID_map):
+  def estimate_granule_params(tileName, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale, inParams, DS_Options, netID_map):
     one_granule_items  = eoMz.get_one_granule_items(stac_items, tileName)  # Extract a list of stac items based on an unique tile name       
-    one_granule_mosaic = eoMz.get_granule_mosaic(SsrData, one_granule_items, StartStr, EndStr, criteria['bands'], xy_bbox, ProjStr, Scale, eoIM.EXTRA_ANGLE)
+    one_granule_mosaic = eoMz.get_granule_mosaic(SsrData, one_granule_items, StartStr, EndStr, criteria['bands'], ProjStr, Scale, eoIM.EXTRA_ANGLE)
     #eoMz.export_mosaic(inParams, one_tile_mosaic)    
 
     if one_granule_mosaic is not None and one_granule_mosaic.x.size > 0 and one_granule_mosaic.y.size > 0:
@@ -200,9 +202,9 @@ def create_LEAF_maps(inParams):
       #max_spec_val       = xr.apply_ufunc(np.maximum, one_granule_mosaic[SsrData['GRN']], one_granule_mosaic[SsrData['NIR']])
       #one_granule_mosaic = one_granule_mosaic.where(max_spec_val > 0)      
     
-      one_tile_params = SL2P_NetsTools.estimate_VParams(inParams, DS_Options, one_granule_mosaic, netID_map)    
+      one_granule_params = SL2P_NetsTools.estimate_VParams(inParams, DS_Options, one_granule_mosaic, netID_map)
       #eoMz.export_mosaic(inParams, one_tile_params)
-      return one_tile_params
+      return one_granule_params
     else:
       return None
   
@@ -212,17 +214,23 @@ def create_LEAF_maps(inParams):
   # Parallelly loop through each granule to produce vegetation parameter sub-maps, and then merge them into
   # 'entire_map'
   #==========================================================================================================
-  with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
-    futures = [executor.submit(estimate_granule_params, tile, stac_items, SsrData, StartStr, EndStr, criteria, xy_bbox, ProjStr, Scale, inParams, DS_Options, netID_map) for tile in unique_granules]
-    count = 0
+  count = 0
+  with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+    futures = [executor.submit(estimate_granule_params, tile, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale, inParams, DS_Options, netID_map) for tile in unique_granules]
+    
     for future in concurrent.futures.as_completed(futures):
-      one_tile_param = future.result()
-      if one_tile_param is not None:
-        entire_map = entire_map.combine_first(one_tile_param)        
-        count += 1
-      
-      print('\n<<< Complete production for %2dth granule >>>'%(count))
+      granule_params = future.result()
+      if granule_params is not None:
+        granule_params = granule_params.reindex_like(entire_map)   # do not apply any value to "method" parameter, just default value
+        
+        #mask = granule_params[eoIM.pix_date] > entire_map[eoIM.pix_date]
+        #for var in entire_map.data_vars:
+        #  entire_map[var] = entire_map[var].where(~mask, granule_params[var], True)
 
+        entire_map = entire_map.combine_first(granule_params)        
+        count += 1      
+        print('\n<<<<<<<< Complete production for %2dth granule >>>>>>>>'%(count))
+    
   #==========================================================================================================
   # Display the elapsed time for entire process
   #==========================================================================================================
@@ -477,7 +485,7 @@ def LEAF_production(inExeParams):
 #     'year': 2023,                # An integer representing image acquisition year
 #     'nbYears': -1,               # positive int for annual product, or negative int for monthly product
 #     'months': [8],               # A list of integers represening one or multiple monthes     
-#     'tile_names': ['tile55'],    # A list of (sub-)tile names (defined using CCRS' tile griding system) 
+#     'tile_names': ['tile55_922'],    # A list of (sub-)tile names (defined using CCRS' tile griding system) 
 #     'prod_names': ['LAI', 'fCOVER'],    #['mosaic', 'LAI', 'fCOVER', ]    
 #     'resolution': 200,            # Exporting spatial resolution    
 #     'out_folder': 'C:/Work_documents/LEAF_tile55_922_2023_200m',  # the folder name for exporting
