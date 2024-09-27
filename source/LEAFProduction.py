@@ -31,8 +31,10 @@ import SL2P_NetsTools
 # Revision history:  2024-Aug-02  Lixin Sun  Initial creation
 #
 #############################################################################################################
-def LEAF_base_image(Params, Region, ProjStr, Scale, Criteria):
+def LEAF_base_image(StacItems, Params, Region, ProjStr, Scale, Criteria):
   '''
+     Args:
+       StacItems(List): A list of STAC items (imaging angles included) searched for a study area and a time windows; 
   '''
   start_time = time.time()
 
@@ -42,28 +44,12 @@ def LEAF_base_image(Params, Region, ProjStr, Scale, Criteria):
     return None, None, 0
   
   #==========================================================================================================
-  # Search all the STAC items based on a spatial region and time window
-  # Note: The third parameter (MaxImgs) for "search_STAC_Catalog" function cannot be too large. Otherwise,
-  #       a server internal error will be triggered.
-  #==========================================================================================================  
-  stac_items = eoMz.search_STAC_Catalog(Region, Criteria, 100, True)
-
-  print(f"\n<LEAF_base_image> A total of {len(stac_items):d} items were found.\n")
-  eoMz.display_meta_assets(stac_items)
-
-  #==========================================================================================================
-  # Ingest imaging geometry angles into each STAC item
-  #==========================================================================================================
-  stac_items, angle_time = eoMz.ingest_Geo_Angles(stac_items)
-  print('\n The total elapsed time for ingesting angles = %6.2f minutes'%(angle_time))
-
-  #==========================================================================================================
   # Load the first image based on the boundary box of ROI
   #==========================================================================================================
   LatLon_bbox = eoUs.get_region_bbox(Region)
   
   band1 = Criteria['bands'][0]
-  ds_xr = odc.stac.load([stac_items[0]],
+  ds_xr = odc.stac.load([StacItems[0]],
                         bands  = [band1],
                         chunks = {'x': 1000, 'y': 1000},
                         crs    = ProjStr, 
@@ -108,7 +94,7 @@ def LEAF_base_image(Params, Region, ProjStr, Scale, Criteria):
 
   stop_time = time.time() 
 
-  return out_xrDS, stac_items, (stop_time - start_time)/60
+  return out_xrDS, (stop_time - start_time)/60
 
 
 
@@ -125,6 +111,62 @@ def LEAF_base_image(Params, Region, ProjStr, Scale, Criteria):
 #
 #############################################################################################################
 def create_LEAF_maps(inParams):
+  '''
+    Args:
+      inParams(dictionary): A dictionary containing all execution parameters.'''
+
+  if inParams == None:
+    print('<create_LEAF_maps> Cannot create vegetation parameter maps due to invalid input parameter!')
+    return None
+  
+  leaf_start = time.time()
+  #==========================================================================================================
+  # Validate input parameters
+  #==========================================================================================================
+  if len(inParams['current_tile']) < 6: #Ensure the existence of a valid 'current_tile' item
+    print('<create_LEAF_maps> Invalid <current_tile> item in parameter dictionary!')
+    return None
+  
+  if len(str(inParams['current_month'])) < 1: #Ensure the existence of a valid 'current_month' item
+    print('<create_LEAF_maps> Invalid <current_month> item in parameter dictionary!')
+    return None
+  
+  #==========================================================================================================
+  # Get a list of unique granule names
+  #==========================================================================================================
+  mosaic = eoMz.period_mosaic(inParams, eoIM.EXTRA_ANGLE)
+  print('\n<create_LEAF_maps> The bands in mosaic image:', mosaic.data_vars)
+
+  #==========================================================================================================
+  # (1) Read and clip land cover map based on the spatial extent of "entire_map"
+  # (2) Create a network ID map with the same spatial dimensions as clipped landcover map
+  #==========================================================================================================  
+  #sub_LC_map = eoAD.get_local_CanLC('F:\\Canada_LC2020\\Canada_LC_2020_30m.tif', entire_map) # for workstation at Observatory
+  sub_LC_map = eoAD.get_local_CanLC('C:\\Work_documents\\Canada_LC_2020_30m.tif', mosaic) # for work laptop
+  SsrData    = eoIM.SSR_META_DICT[str(inParams['sensor']).upper()]
+
+  DS_Options = SL2P_V1.make_DS_options('sl2p_nets', SsrData)  
+  netID_map  = SL2P_NetsTools.makeIndexLayer(sub_LC_map, DS_Options)
+
+  #==========================================================================================================
+  # Define a function that can produce vegetation parameter maps for ONE granule
+  #==========================================================================================================
+  ready_mosaic = eoIM.rescale_spec_bands(mosaic, SsrData['LEAF_BANDS'], 0.01, 0)
+  out_VP_maps  = SL2P_NetsTools.estimate_VParams(inParams, DS_Options, ready_mosaic, netID_map)  
+    
+  #==========================================================================================================
+  # Display the elapsed time for entire process
+  #==========================================================================================================
+  leaf_stop = time.time()
+  leaf_time = (leaf_stop - leaf_start)/60
+  print('\n\n<<< The elapsed time for generating one monthly tile product = %6.2f minutes>>>'%(leaf_time))
+
+  return out_VP_maps
+
+
+
+
+def old_create_LEAF_maps(inParams):
   '''
     Args:
       inParams(dictionary): A dictionary containing all execution parameters.'''
@@ -158,10 +200,21 @@ def create_LEAF_maps(inParams):
   criteria = eoMz.get_query_conditions(SsrData, StartStr, EndStr)
 
   #==========================================================================================================
+  # Search all the STAC items based on a spatial region and a time window
+  # Note: (1) The third parameter (MaxImgs) for "search_STAC_Catalog" function cannot be too large. Otherwise,
+  #           a server internal error will be triggered.
+  #       (2) The imaging angles have been attached to each STAC item by "search_STAC_Catalog" function.
+  #==========================================================================================================  
+  stac_items = eoMz.search_STAC_Catalog(Region, criteria, 100)
+
+  print(f"\n<period_mosaic> A total of {len(stac_items):d} items were found.\n")
+  eoMz.display_meta_assets(stac_items)
+
+  #==========================================================================================================
   # Create an empty vegetation parameetr map that covers entire ROI and includes all necessary bands, such as 
   # all vegetation parameters, pixel date and pixel quality.
   #==========================================================================================================
-  entire_map, stac_items, used_time = LEAF_base_image(inParams, Region, ProjStr, Scale, criteria)  
+  entire_map, used_time = LEAF_base_image(stac_items, inParams, Region, ProjStr, Scale, criteria)  
 
   print('\n<create_LEAF_maps> the empty entire veg parameter map = ', entire_map)
   print('\n<<< elapsed time for generating an empty entire veg parameter map = %6.2f minutes>>>'%(used_time))  
@@ -184,11 +237,6 @@ def create_LEAF_maps(inParams):
 
   #one_granule_params = SL2P_NetsTools.estimate_VParams(inParams, DS_Options, one_granule_mosaic, netID_map)
 
-  #==========================================================================================================
-  # Obtain the bbox in projected CRS system (x and y, rather than Lat and Lon)
-  #==========================================================================================================
-  #xy_bbox = eoUs.get_region_bbox(Region, ProjStr)
-    
   #==========================================================================================================
   # Define a function that can produce vegetation parameter maps for ONE granule
   #==========================================================================================================
@@ -239,7 +287,6 @@ def create_LEAF_maps(inParams):
   print('\n\n<<< The elapsed time for generating one monthly tile product = %6.2f minutes>>>'%(leaf_time))
 
   return entire_map
-
 
 
 
@@ -432,12 +479,12 @@ def tile_LEAF_production(Params):
         #export_compact_params(fun_Param_dict, region, out_params, task_list)
 
       else: 
-        # Produce and export monthly/seasonal vegetation parameetr maps
-        print('\n<tile_LEAF_production> Generate and export separate biophysical maps......')        
-        one_product = create_LEAF_maps(Params)
+        # Produce and export monthly/seasonal vegetation biophysical parameetr (VBP) maps
+        print('\n<tile_LEAF_production> Generate and export separate vegetation biophysical maps......')        
+        VBP_maps = create_LEAF_maps(Params)
       
-        # Export results for ONE tile and ONE month/season
-        export_VegParamMaps(Params, one_product)
+        # Export results for ONE tile and ONE month/season        
+        export_VegParamMaps(Params, VBP_maps)
 
 
 
@@ -487,8 +534,8 @@ def LEAF_production(inExeParams):
 #     'months': [8],               # A list of integers represening one or multiple monthes     
 #     'tile_names': ['tile55_922'],    # A list of (sub-)tile names (defined using CCRS' tile griding system) 
 #     'prod_names': ['LAI', 'fCOVER'],    #['mosaic', 'LAI', 'fCOVER', ]    
-#     'resolution': 200,            # Exporting spatial resolution    
-#     'out_folder': 'C:/Work_documents/LEAF_tile55_922_2023_200m',  # the folder name for exporting
+#     'resolution': 400,            # Exporting spatial resolution    
+#     'out_folder': 'C:/Work_documents/LEAF_tile55_922_2023_400m',  # the folder name for exporting
 #     'projection': 'EPSG:3979'   
     
 #     #'start_date': '2022-06-15',

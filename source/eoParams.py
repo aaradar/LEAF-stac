@@ -117,7 +117,7 @@ def year_consist(inParams):
 #
 #############################################################################################################
 def set_current_time(inParams, current_month):
-  custon_window = is_custom_window(inParams)  
+  custon_window = is_custom_window(inParams)
 
   if custon_window == True:
     inParams = year_consist(inParams)
@@ -318,7 +318,7 @@ def get_mosaic_params(inParams):
   out_Params = update_default_params(inParams)  # Modify default parameter dictionary with a given one
 
   if out_Params is not None:
-    out_Params['prod_names'] = ['mosaic']         # Of course, product name should be always 'mosaic'
+    out_Params['prod_names'] = ['mosaic']       # Of course, product name should be always 'mosaic'
 
   return out_Params  
 
@@ -342,12 +342,16 @@ def get_LC_params(inParams):
 
 
 #############################################################################################################
-# Description: This function returns a valid spatial region defined in parameter dictionary.
+# Description: This function returns a valid spatial region defined in a given parameter dictionary.
 # 
 # Revision history:  2024-Feb-27  Lixin Sun  Initial creation
 #
 #############################################################################################################
 def get_spatial_region(inParams):
+  if inParams == None:
+    print('<get_spatial_region> No inparameter dictionary is provided!!!')
+    return None
+  
   all_keys = inParams.keys()
 
   if 'custom_region' in all_keys:
@@ -382,8 +386,14 @@ def get_spatial_region(inParams):
 # Revision history:  2024-Feb-27  Lixin Sun  Initial creation
 #
 #############################################################################################################
-def get_time_window(inParams):  
-  if is_custom_window(inParams) == True:    
+def get_time_window(inParams):
+  if inParams == None:
+    print('<get_time_window> No inparameter dictionary is provided!!!')
+    return None, None
+  
+  all_keys = inParams.keys()
+
+  if is_custom_window(inParams) == True:
     start_date = datetime.strptime(inParams['start_date'], "%Y-%m-%d")
     end_date   = datetime.strptime(inParams['end_date'],   "%Y-%m-%d")
 
@@ -391,26 +401,29 @@ def get_time_window(inParams):
 
     return start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")
   
-  else:
-    current_month = inParams['current_month']
-    if current_month > 0  and current_month < 13:
-      # Extract veg parameters on a monthly basis
-      return eoUs.month_range(inParams['year'], current_month)
-    else:  
-      nYears = inParams['nbYears']
-      year   = inParams['year']
-   
-      if nYears < 0:
-        return eoUs.summer_range(year) 
-      else:
-        month = inParams['months'][0]
-        if month > 12:
-          month = 12
-        elif month < 1:
-          month = 1
+  else:    
+    if 'current_month' in all_keys:
+      current_month = inParams['current_month']
+      if current_month > 0  and current_month < 13:
+        # Extract veg parameters on a monthly basis
+        return eoUs.month_range(inParams['year'], current_month)
+      else:  
+        nYears = inParams['nbYears']
+        year   = inParams['year']
+    
+        if nYears < 0:
+          return eoUs.summer_range(year) 
+        else:
+          month = inParams['months'][0]
+          if month > 12:
+            month = 12
+          elif month < 1:
+            month = 1
 
-        return eoUs.month_range(year, month)
-
+          return eoUs.month_range(year, month)
+    else:
+      print('<get_time_window> \'current_month\' is not a key in the given input parameter dictionary!!!')
+      return None, None
 
 
 
