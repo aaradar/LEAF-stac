@@ -1,21 +1,24 @@
 # import pystac_client
 # import odc.stac
+# import xarray as xr
 # import dask.diagnostics as ddiag
 
 
-# DestProj   = 'epsg:3979'
+# DestProj   = 'epsg:3979'   # Define a destination projection. Lat/lon EPSG code = epsg:4326. 
 # geo_region = {'type': 'Polygon', 'coordinates': [[[-76.120,45.184], [-75.383,45.171], [-75.390,45.564], [-76.105,45.568], [-76.120,45.184]]]}
 # #LatLon_bbox = eoUs.get_region_bbox(Region)
-# xy_bbox    = eoUs.get_region_bbox(geo_region, DestProj)
+# xy_bbox    = eoUs.get_region_bbox(geo_region, DestProj)  # Obtain the bbox of a syudy area in destination coordinate system 
 
-# catalog = pystac_client.Client.open("https://earth-search.aws.element84.com/v1")  # AWS STAC Catalog
+# catalog = pystac_client.Client.open("https://earth-search.aws.element84.com/v1")  # Connect to the STAC Catalog on AWS
 
-# collection = catalog.search(collections = ["sentinel-2-l2a"], 
-#                             intersects  = geo_region,                           
-#                             datetime    = "2021-06-01/2021-06-16", 
-#                             query       = {"eo:cloud_cover": {"lt": 85.0} },
-#                             limit       = 100)
+# # Obtain the metadata on a collection of Sentinel-2 images
+# collection = catalog.search(collections = ["sentinel-2-l2a"],                  # A specific collection name
+#                             intersects  = geo_region,                          # Spatial region 
+#                             datetime    = "2021-06-01/2021-06-16",             # Time window
+#                             query       = {"eo:cloud_cover": {"lt": 85.0} },   # Filter criteria
+#                             limit       = 100)                                 
 
+# # Define how to download a set/subset of images
 # xrDS = odc.stac.load(list(collection.items()),
 #                       bands         = ['blue', 'green', 'red', 'nir08', 'swir16', 'swir22'],
 #                       chunks        = {'x': 1000, 'y': 1000},
@@ -26,11 +29,21 @@
 #                       x             = (xy_bbox[0], xy_bbox[2]),
 #                       y             = (xy_bbox[3], xy_bbox[1]))
   
-# # actually load data into memory
+# # Actually load images into memory (stored in an Xarray.Dataset object) using DASK for parallel processing 
 # with ddiag.ProgressBar():
 #   xrDS.load()
 
 
+# median  = xrDS.median(dim='time') 
+
+# blu_img = xrDS['blue']
+# grn_img = xrDS['green']
+
+# max_SV = xr.apply_ufunc(np.maximum, blu_img, grn_img)
+
+# time_values = xrDS.coords['time'].values  
+
+# print(xrDS.data_vars)
 
 # max_indices = xrDS[eoIM.pix_score].argmax(dim='time')
 # mosaic      = xrDS.isel(time=max_indices)
@@ -372,6 +385,7 @@ def ingest_Geo_Angles(StacItems):
     
     return item
   
+  # investigate if there is other library for parallel for this part
   out_items = []
   with concurrent.futures.ThreadPoolExecutor() as executor:
     futures = [executor.submit(process_item, item) for item in StacItems]
@@ -460,7 +474,7 @@ def get_base_Image(StacItems, Region, ProjStr, Scale, Criteria, ExtraBandCode):
 
   ds_xr = odc.stac.load([StacItems[0]],
                         bands         = Criteria['bands'],
-                        chunks        = {'x': 1000, 'y': 1000},
+                        chunks        = {'x': 1000, 'y': 1000}, #2000
                         crs           = ProjStr, 
                         fail_on_error = False,
                         resolution    = Scale, 
@@ -490,6 +504,7 @@ def get_base_Image(StacItems, Region, ProjStr, Scale, Criteria, ExtraBandCode):
   #==========================================================================================================
   out_xrDS = out_xrDS*0 + -10000.0
   #out_xrDS = out_xrDS.where(out_xrDS > 0)
+  #ds_xr.load()
 
   stop_time = time.time() 
   
@@ -833,12 +848,8 @@ def period_mosaic(inParams, ExtraBandCode):
   '''
     Args:
       inParams(dictionary): A dictionary containing all necessary execution parameters;
-      ExtraBandCode(int): An integer indicating if add extra bands and which kind of bands.'''
+      ExtraBandCode(int): An integer indicating which kind of extra bands will be created as well.'''
   
-  if inParams == None:
-    print('<period_mosaic> No input parameter dictionary was provided!')
-    return None
-   
   mosaic_start = time.time()  
 
   #==========================================================================================================
@@ -846,23 +857,23 @@ def period_mosaic(inParams, ExtraBandCode):
   #==========================================================================================================
   StartStr, EndStr = eoPM.get_time_window(inParams)
   if StartStr == None or EndStr == None:
-    print('<period_mosaic> Invalid time window was defined!!!')
+    print('\n<period_mosaic> Invalid time window was defined!!!')
     return None
   
   Region = eoPM.get_spatial_region(inParams)
   if Region == None:
-    print('<period_mosaic> Invalid spatial region was defined!!!')
+    print('\n<period_mosaic> Invalid spatial region was defined!!!')
     return None
   
   #==========================================================================================================
   # Prepare other required parameters and query criteria
   #==========================================================================================================
+  ProjStr = str(inParams['projection']) if 'projection' in inParams else 'EPSG:3979'
+  Scale   = int(inParams['resolution']) if 'resolution' in inParams else 20
+
   SsrData  = eoIM.SSR_META_DICT[str(inParams['sensor']).upper()]
   criteria = get_query_conditions(SsrData, StartStr, EndStr)
   
-  ProjStr  = str(inParams['projection'])  
-  Scale    = int(inParams['resolution'])
-
   #==========================================================================================================
   # Search all the STAC items based on a spatial region and a time window
   # Note: (1) The third parameter (MaxImgs) for "search_STAC_Catalog" function cannot be too large. Otherwise,
