@@ -597,28 +597,21 @@ def attach_score(SsrData, ready_IC, StartStr, EndStr):
   #==========================================================================================================
   # Parallelize the process of score calculations for every image in 'ready_IC'
   #==========================================================================================================
-  time_vals = list(ready_IC.time.values)
-  with concurrent.futures.ThreadPoolExecutor() as executor:
-    futures = [executor.submit(image_score, i, T, ready_IC, midDate, SsrData, median_blu, median_nir) for i, T in enumerate(time_vals)]
+  #time_vals = list(ready_IC.time.values)
+  # with concurrent.futures.ThreadPoolExecutor() as executor:
+  #   futures = [executor.submit(image_score, i, T, ready_IC, midDate, SsrData, median_blu, median_nir) for i, T in enumerate(time_vals)]
     
-    for future in concurrent.futures.as_completed(futures):
-      i, score = future.result()
-      ready_IC[eoIM.pix_score][i, :,:] = score
+  #   for future in concurrent.futures.as_completed(futures):
+  #     i, score = future.result()
+  #     ready_IC[eoIM.pix_score][i, :,:] = score
 
+  for i, T in enumerate(ready_IC.time.values):    
+    i, score_img = image_score(i, T, ready_IC, midDate, SsrData, median_blu, median_nir)    
+    ready_IC[eoIM.pix_score][i, :,:] = score_img
+  
   stop = time.time() 
 
   return ready_IC, (stop - start)/60.0
-
-  '''
-  for i, T in enumerate(ready_IC.time.values):
-    #score_one_img(i, T)
-    timestamp  = pd.Timestamp(T).to_pydatetime()
-    time_score = get_time_score(timestamp, midDate, SsrData['SSR_CODE'])   
-    
-    img = ready_IC.isel(time=i)
-    spec_score = get_spec_score(SsrData, img, median_blu, median_nir)     
-    ready_IC[eoIM.pix_score][i, :,:] = spec_score * time_score 
-  '''  
 
 
 
@@ -734,6 +727,7 @@ def get_granule_mosaic(SsrData, GranuleItems, StartStr, EndStr, Bands, ProjStr, 
        SsrData(Dictionary): Some meta data on a used satellite sensor;
        TileItems(List): A list of STAC items associated with a specific tile;
        ExtraBandCode(Int): An integer indicating if to attach extra bands to mosaic image.'''
+  
   successful_items = []
   for item_ID in GranuleItems:
     try:
@@ -754,26 +748,16 @@ def get_granule_mosaic(SsrData, GranuleItems, StartStr, EndStr, Bands, ProjStr, 
   xrDS = xr.concat(successful_items, dim='time')
   
   #==========================================================================================================
-  # Clip the 'xrDS' based on 'BaseBBox', which is the bbox of final product
-  #==========================================================================================================
-  #xrDS = xrDS.sel(x=slice(BaseBBox[0], BaseBBox[2]), y=slice(BaseBBox[3], BaseBBox[1]))
-
-  #==========================================================================================================
   # 
   #==========================================================================================================
-  # xrDS = odc.stac.load(TileItems,
+  # xrDS = odc.stac.load([GranuleItems],
   #                      bands  = Bands,
   #                      chunks = {'x': 1000, 'y': 1000},
   #                      crs    = ProjStr, 
   #                      resolution = Scale)
+  # xrDS.load()
 
-  #==========================================================================================================
-  # Actually load all data from a lazy-loaded dataset into in-memory Numpy arrays
-  #==========================================================================================================
-  # with ddiag.ProgressBar():
-  #   xrDS.load()   
-
-  print('\n<get_granule_mosaic> loaded xarray dataset:\n', xrDS) 
+  #print('\n<get_granule_mosaic> loaded xarray dataset:\n', xrDS) 
 
   print("\n<get_granule_mosaic> Time Dimension Values:")
   time_values = xrDS.coords['time'].values  
@@ -809,8 +793,10 @@ def get_granule_mosaic(SsrData, GranuleItems, StartStr, EndStr, Bands, ProjStr, 
   # Note: calling "fillna" function before invaking "argmax" function is very important!!!
   #==========================================================================================================
   xrDS = xrDS.fillna(-0.0001)
+  #xrDS.load()
+
   max_indices = xrDS[eoIM.pix_score].argmax(dim='time')
-  mosaic  = xrDS.isel(time=max_indices)
+  mosaic      = xrDS.isel(time=max_indices)
 
   #elif extra_code == eoIM.EXTRA_NDVI:
   #  xrDS = eoIM.attach_NDVIBand(xrDS, SsrData)
