@@ -134,14 +134,12 @@ def set_current_time(inParams, current_time):
 # Revision history:  2024-Apr-08  Lixin Sun  Initial creation
 #
 #############################################################################################################
-def set_spatial_region(inParams, region_name):
-  print('\n\n<set_spatial_region> the given parameters = ', inParams) 
+def set_spatial_region(inParams, region_name):  
   if 'regions' not in inParams:
     print('\n<set_spatial_region> There is no \'regions\' key!')
     return None
   
   region_names = inParams['regions'].keys()
-  print('<set_spatial_region> All region names = ', region_names)  
 
   if region_name not in region_names:
     print('<set_spatial_region> {} is an invalid tile name!'.format(region_name))
@@ -403,13 +401,10 @@ def update_default_params(inParams):
 # Description: Obtain a parameter dictionary for LEAF tool
 #############################################################################################################
 def get_LEAF_params(inParams):
-  print('\n\n<get_LEAF_params> input parameters:', inParams)
   out_Params = update_default_params(inParams)  # Modify default parameters with given ones  
   out_Params['unit'] = 2                     # Always surface reflectance for LEAF production
   
-  print('\n\n<get_LEAF_params> output parameters:', out_Params)
   return out_Params  
-
 
 
 
@@ -422,6 +417,7 @@ def get_mosaic_params(inParams):
   out_Params['prod_names'] = ['mosaic']         # Of course, product name should be always 'mosaic'
 
   return out_Params  
+
 
 
 
