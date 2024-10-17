@@ -1018,22 +1018,35 @@ def period_mosaic(inParams, ExtraBandCode):
 
   #test_mosaic = mosaic_one_granule(unique_granules[10], stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale)
   #return test_mosaic
-  cpu_cores = os.cpu_count()
-  print('\n\n The numb of CPU cores = ', cpu_cores)
+  count = 0
+  for granule in unique_granules:
+    granule_mosaic = mosaic_one_granule(granule, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale)
 
-  with concurrent.futures.ThreadPoolExecutor(max_workers=cpu_cores) as executor:
-    futures = [executor.submit(mosaic_one_granule, granule, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale) for granule in unique_granules]
-    count = 0
-    for future in concurrent.futures.as_completed(futures):
-      granule_mosaic = future.result()
-      if granule_mosaic is not None:
-        granule_mosaic = granule_mosaic.reindex_like(base_img)   # do not apply any value to "method" parameter, just default value
-        mask = granule_mosaic[eoIM.pix_score] > base_img[eoIM.pix_score]
-        for var in base_img.data_vars:
-          base_img[var] = base_img[var].where(~mask, granule_mosaic[var], True)
+    if granule_mosaic is not None:
+      granule_mosaic = granule_mosaic.reindex_like(base_img)   # do not apply any value to "method" parameter, just default value
+      mask = granule_mosaic[eoIM.pix_score] > base_img[eoIM.pix_score]
+      for var in base_img.data_vars:
+        base_img[var] = base_img[var].where(~mask, granule_mosaic[var], True)
+      
+      count += 1      
+      print('\n<<<<<<<<<< Complete %2dth sub mosaic >>>>>>>>>'%(count))
+      
+  # cpu_cores = os.cpu_count()
+  # print('\n\n The numb of CPU cores = ', cpu_cores)
 
-        count += 1      
-        print('\n<<<<<<<<<< Complete %2dth sub mosaic >>>>>>>>>'%(count))
+  # with concurrent.futures.ThreadPoolExecutor(max_workers=cpu_cores) as executor:
+  #   futures = [executor.submit(mosaic_one_granule, granule, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale) for granule in unique_granules]
+  #   count = 0
+  #   for future in concurrent.futures.as_completed(futures):
+  #     granule_mosaic = future.result()
+  #     if granule_mosaic is not None:
+  #       granule_mosaic = granule_mosaic.reindex_like(base_img)   # do not apply any value to "method" parameter, just default value
+  #       mask = granule_mosaic[eoIM.pix_score] > base_img[eoIM.pix_score]
+  #       for var in base_img.data_vars:
+  #         base_img[var] = base_img[var].where(~mask, granule_mosaic[var], True)
+
+  #       count += 1      
+  #       print('\n<<<<<<<<<< Complete %2dth sub mosaic >>>>>>>>>'%(count))
 
   #==========================================================================================================
   # Mask out the pixels with negative date value
