@@ -709,6 +709,76 @@ def get_spec_score(SsrData, inImg, median_blu, median_nir):
 
 
 
+#############################################################################################################
+# Description: 
+#
+# Revision history:  2024-May-24  Lixin Sun  Initial creation
+# 
+#############################################################################################################
+@dask.delayed
+def chunk_mosaic(chunk, SsrData, StartStr, EndStr, GranuleItems, ExtraBandCode, time_values):
+  # SsrData       = Packed_params['SsrData']
+  # StartStr      = Packed_params['Start']
+  # EndStr        = Packed_params['End']
+  # GranuleItems  = Packed_params['Items']
+  # ExtraBandCode = Packed_params['ExtraBandCode']
+
+  #==========================================================================================================
+  # Attach three layers, an empty 'score', acquisition DOY and 'time_index', to eath item/image in "xrDS" 
+  #==========================================================================================================  
+  #xrDS['time'] = pd.to_datetime(xrDS['time'].values)
+  time_datetime = pd.to_datetime(time_values)
+  doys = [date.timetuple().tm_yday for date in time_datetime]  #Calculate DOYs for every temporal point
+
+  chunk[eoIM.pix_score] = chunk[SsrData['BLU']]*0
+  chunk[eoIM.pix_date]  = xr.DataArray(np.array(doys, dtype='uint16'), dims=['time'])
+  chunk['time_index']   = xr.DataArray(np.array(range(0, len(time_values)), dtype='uint8'), dims=['time'])
+  
+  #==========================================================================================================
+  # Apply default pixel mask, rescaling gain and offset to each image in 'chunk'
+  #==========================================================================================================
+  chunk = eoIM.apply_default_mask(chunk, SsrData)
+  chunk = eoIM.apply_gain_offset(chunk, SsrData, 100, False)
+
+  #==========================================================================================================
+  # Calculate compositing scores for every valid pixel in xarray dataset object (chunk)
+  #==========================================================================================================
+  chunk, score_time = attach_score(SsrData, chunk, StartStr, EndStr)
+
+  print('<get_granule_mosaic> Complete pixel scoring, elapsed time = %6.2f minutes'%(score_time)) 
+
+  #==========================================================================================================
+  # Create a composite image based on compositing scores
+  # Note: calling "fillna" function before invaking "argmax" function is very important!!!
+  #==========================================================================================================
+  chunk       = chunk.fillna(-0.0001)
+
+  max_indices = chunk[eoIM.pix_score].argmax(dim='time')
+  mosaic      = chunk.isel(time=max_indices)
+
+  #elif extra_code == eoIM.EXTRA_NDVI:
+  #  chunk = eoIM.attach_NDVIBand(chunk, SsrData)
+  #==========================================================================================================
+  # Attach an additional bands as necessary 
+  #==========================================================================================================
+  extra_code = int(ExtraBandCode)
+  if extra_code == eoIM.EXTRA_ANGLE:
+    mosaic = eoIM.attach_AngleBands(mosaic, GranuleItems)
+    #mosaic = mosaic.drop_vars(['blue','scl'])    
+
+  #==========================================================================================================
+  # Remove 'time_index' and 'score' variables from submosaic 
+  #==========================================================================================================
+  mosaic = mosaic.drop_vars(['time_index'])
+
+  mosaic = mosaic.where(mosaic[eoIM.pix_date] > 0)
+  print('<get_granule_mosaic> Data variables of granule mosaic = ', mosaic.data_vars)
+
+  return mosaic
+
+
+
+
 
 
 #############################################################################################################
@@ -722,6 +792,56 @@ def get_spec_score(SsrData, inImg, median_blu, median_nir):
 #
 #############################################################################################################
 def get_granule_mosaic(SsrData, GranuleItems, StartStr, EndStr, Bands, ProjStr, Scale, ExtraBandCode):
+  '''
+     Args:
+       SsrData(Dictionary): Some meta data on a used satellite sensor;
+       TileItems(List): A list of STAC items associated with a specific tile;
+       ExtraBandCode(Int): An integer indicating if to attach extra bands to mosaic image.'''
+  
+  successful_items = []
+  for item_ID in GranuleItems:
+    try:
+      one_DS = odc.stac.load([item_ID],
+                              bands  = Bands,
+                              chunks = {'x': 1000, 'y': 1000},
+                              crs    = ProjStr, 
+                              resolution = Scale)
+      one_DS.load()
+
+      successful_items.append(one_DS)
+    except Exception as e:
+      continue
+  
+  if not successful_items:
+    return None
+  
+  xrDS = xr.concat(successful_items, dim='time')
+  
+  print("\n<get_granule_mosaic> Time Dimension Values:")
+  time_values = xrDS.coords['time'].values  
+  for t in time_values:
+    print(t)
+
+
+  # packed_params = {}
+  # packed_params['SsrData'] = SsrData
+  # packed_params['Start']   = StartStr
+  # packed_params['End']     = EndStr
+  # packed_params['Items']   = GranuleItems
+  # packed_params['ExtraBandCode'] = ExtraBandCode
+
+  results = xrDS.map_blocks(chunk_mosaic, args = [SsrData, StartStr, EndStr, GranuleItems, ExtraBandCode, time_values])
+
+  granule_mosaic = results.compute()
+  
+  return granule_mosaic
+
+
+
+
+
+
+def get_granule_mosaic_old(SsrData, GranuleItems, StartStr, EndStr, Bands, ProjStr, Scale, ExtraBandCode):
   '''
      Args:
        SsrData(Dictionary): Some meta data on a used satellite sensor;
@@ -898,7 +1018,7 @@ def period_mosaic(inParams, ExtraBandCode):
 
   #test_mosaic = mosaic_one_granule(unique_granules[10], stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale)
   #return test_mosaic
-  cpu_cores = os.cpu_count()/2
+  cpu_cores = os.cpu_count()
   print('\n\n The numb of CPU cores = ', cpu_cores)
 
   with concurrent.futures.ThreadPoolExecutor(max_workers=cpu_cores) as executor:
