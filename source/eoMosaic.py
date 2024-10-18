@@ -791,13 +791,13 @@ def chunk_mosaic(chunk, SsrData, StartStr, EndStr, GranuleItems, ExtraBandCode, 
 #                    2024-Jul-05  Lixin Sun  Added imaging angle bands to each item/image 
 #
 #############################################################################################################
-def get_granule_mosaic(SsrData, GranuleItems, StartStr, EndStr, Bands, ProjStr, Scale, ExtraBandCode):
+def get_granule_mosaic_test(SsrData, GranuleItems, StartStr, EndStr, Bands, ProjStr, Scale, ExtraBandCode):
   '''
      Args:
        SsrData(Dictionary): Some meta data on a used satellite sensor;
        TileItems(List): A list of STAC items associated with a specific tile;
        ExtraBandCode(Int): An integer indicating if to attach extra bands to mosaic image.'''
-  
+    
   successful_items = []
   for item_ID in GranuleItems:
     try:
@@ -822,13 +822,6 @@ def get_granule_mosaic(SsrData, GranuleItems, StartStr, EndStr, Bands, ProjStr, 
   for t in time_values:
     print(t)
 
-  # packed_params = {}
-  # packed_params['SsrData'] = SsrData
-  # packed_params['Start']   = StartStr
-  # packed_params['End']     = EndStr
-  # packed_params['Items']   = GranuleItems
-  # packed_params['ExtraBandCode'] = ExtraBandCode
-
   results = xrDS.map_blocks(chunk_mosaic, args = [SsrData, StartStr, EndStr, GranuleItems, ExtraBandCode, time_values])
 
   granule_mosaic = results.compute()
@@ -839,16 +832,19 @@ def get_granule_mosaic(SsrData, GranuleItems, StartStr, EndStr, Bands, ProjStr, 
 
 
 
-
-def get_granule_mosaic_old(SsrData, GranuleItems, StartStr, EndStr, Bands, ProjStr, Scale, ExtraBandCode):
+@dask.delayed
+def get_granule_mosaic(granule_name, stac_items, SsrData, StartStr, EndStr, Bands, ProjStr, Scale, ExtraBandCode):
   '''
      Args:
        SsrData(Dictionary): Some meta data on a used satellite sensor;
        TileItems(List): A list of STAC items associated with a specific tile;
        ExtraBandCode(Int): An integer indicating if to attach extra bands to mosaic image.'''
   
+  one_granule_items = get_one_granule_items(stac_items, granule_name)  # Extract a list of items based on an unique tile name
+  filtered_items    = get_unique_STAC_items(one_granule_items)         # Remain only one item from those that share the same timestamp
+
   successful_items = []
-  for item_ID in GranuleItems:
+  for item_ID in filtered_items:
     try:
       one_DS = odc.stac.load([item_ID],
                               bands  = Bands,
@@ -869,7 +865,7 @@ def get_granule_mosaic_old(SsrData, GranuleItems, StartStr, EndStr, Bands, ProjS
   #==========================================================================================================
   # 
   #==========================================================================================================
-  # xrDS = odc.stac.load([GranuleItems],
+  # xrDS = odc.stac.load([filtered_items],
   #                      bands  = Bands,
   #                      chunks = {'x': 2000, 'y': 2000},
   #                      crs    = ProjStr, 
@@ -912,19 +908,16 @@ def get_granule_mosaic_old(SsrData, GranuleItems, StartStr, EndStr, Bands, ProjS
   # Note: calling "fillna" function before invaking "argmax" function is very important!!!
   #==========================================================================================================
   xrDS = xrDS.fillna(-0.0001)
-  #xrDS.load()
 
   max_indices = xrDS[eoIM.pix_score].argmax(dim='time')
   mosaic      = xrDS.isel(time=max_indices)
 
-  #elif extra_code == eoIM.EXTRA_NDVI:
-  #  xrDS = eoIM.attach_NDVIBand(xrDS, SsrData)
   #==========================================================================================================
   # Attach an additional bands as necessary 
   #==========================================================================================================
   extra_code = int(ExtraBandCode)
   if extra_code == eoIM.EXTRA_ANGLE:
-    mosaic = eoIM.attach_AngleBands(mosaic, GranuleItems)
+    mosaic = eoIM.attach_AngleBands(mosaic, filtered_items)
     #mosaic = mosaic.drop_vars(['blue','scl'])    
 
   #==========================================================================================================
@@ -938,6 +931,34 @@ def get_granule_mosaic_old(SsrData, GranuleItems, StartStr, EndStr, Bands, ProjS
   return mosaic
 
   
+
+
+
+# @dask.delayed
+# def mosaic_one_granule(granule_name, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale, ExtraBandCode):
+#   one_granule_items = get_one_granule_items(stac_items, granule_name)  # Extract a list of items based on an unique tile name
+#   filtered_items    = get_unique_STAC_items(one_granule_items)         # Remain only one item from those that share the same timestamp
+
+#   return get_granule_mosaic(SsrData, filtered_items, StartStr, EndStr, criteria['bands'], ProjStr, Scale, ExtraBandCode)
+
+
+
+
+
+def merge_granule_mosaics(granule_mosaics, base_img):
+  count = 0
+  for mosaic in granule_mosaics:
+    if mosaic is not None:
+      mosaic = mosaic.reindex_like(base_img)   # do not apply any value to "method" parameter, just default value
+      mask   = mosaic[eoIM.pix_score] > base_img[eoIM.pix_score]
+      for var in base_img.data_vars:
+        base_img[var] = base_img[var].where(~mask, mosaic[var], True)
+      
+      count += 1      
+      print('\n<<<<<<<<<< Complete %2dth sub mosaic >>>>>>>>>'%(count))  
+    
+  return base_img
+
 
 
 
@@ -1009,29 +1030,8 @@ def period_mosaic(inParams, ExtraBandCode):
   #==========================================================================================================
   # Obtain the bbox in projected CRS system (x and y, rather than Lat and Lon)
   #==========================================================================================================
-  @dask.delayed
-  def mosaic_one_granule(granule_name, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale):
-    one_granule_items = get_one_granule_items(stac_items, granule_name)  # Extract a list of items based on an unique tile name
-    filtered_items    = get_unique_STAC_items(one_granule_items)         # Remain only one item from those that share the same timestamp
-
-    return get_granule_mosaic(SsrData, filtered_items, StartStr, EndStr, criteria['bands'], ProjStr, Scale, ExtraBandCode)
-  
-
-  def merge_granule_mosaics(granule_mosaics, base_img):
-    count = 0
-    for mosaic in granule_mosaics:
-      if mosaic is not None:
-        mosaic = mosaic.reindex_like(base_img)   # do not apply any value to "method" parameter, just default value
-        mask   = mosaic[eoIM.pix_score] > base_img[eoIM.pix_score]
-        for var in base_img.data_vars:
-          base_img[var] = base_img[var].where(~mask, mosaic[var], True)
-      
-        count += 1      
-        print('\n<<<<<<<<<< Complete %2dth sub mosaic >>>>>>>>>'%(count))  
-    
-    return base_img
-  
-  granule_mosaics = [mosaic_one_granule(granule, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale) for granule in unique_granules]
+  Bands = criteria['bands']
+  granule_mosaics = [get_granule_mosaic(granule, stac_items, SsrData, StartStr, EndStr, Bands, ProjStr, Scale, ExtraBandCode) for granule in unique_granules]
 
   merged_result = dask.delayed(merge_granule_mosaics)(granule_mosaics, base_img)
 
