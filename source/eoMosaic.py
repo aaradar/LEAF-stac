@@ -745,7 +745,7 @@ def chunk_mosaic(chunk, SsrData, StartStr, EndStr, GranuleItems, ExtraBandCode, 
   #==========================================================================================================
   chunk, score_time = attach_score(SsrData, chunk, StartStr, EndStr)
 
-  print('<get_granule_mosaic> Complete pixel scoring, elapsed time = %6.2f minutes'%(score_time)) 
+  #print('<chunk_mosaic> Complete pixel scoring, elapsed time = %6.2f minutes'%(score_time)) 
 
   #==========================================================================================================
   # Create a composite image based on compositing scores
@@ -772,7 +772,7 @@ def chunk_mosaic(chunk, SsrData, StartStr, EndStr, GranuleItems, ExtraBandCode, 
   mosaic = mosaic.drop_vars(['time_index'])
 
   mosaic = mosaic.where(mosaic[eoIM.pix_date] > 0)
-  print('<get_granule_mosaic> Data variables of granule mosaic = ', mosaic.data_vars)
+  #print('<chunk_mosaic> Data variables of granule mosaic = ', mosaic.data_vars)
 
   return mosaic
 
@@ -803,7 +803,7 @@ def get_granule_mosaic(SsrData, GranuleItems, StartStr, EndStr, Bands, ProjStr, 
     try:
       one_DS = odc.stac.load([item_ID],
                               bands  = Bands,
-                              chunks = {'x': 1000, 'y': 1000},
+                              chunks = {'x': 500, 'y': 500},
                               crs    = ProjStr, 
                               resolution = Scale)
       one_DS.load()
@@ -821,7 +821,6 @@ def get_granule_mosaic(SsrData, GranuleItems, StartStr, EndStr, Bands, ProjStr, 
   time_values = xrDS.coords['time'].values  
   for t in time_values:
     print(t)
-
 
   # packed_params = {}
   # packed_params['SsrData'] = SsrData
@@ -1009,6 +1008,109 @@ def period_mosaic(inParams, ExtraBandCode):
 
   #==========================================================================================================
   # Obtain the bbox in projected CRS system (x and y, rather than Lat and Lon)
+  #==========================================================================================================
+  @dask.delayed
+  def mosaic_one_granule(granule_name, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale):
+    one_granule_items = get_one_granule_items(stac_items, granule_name)  # Extract a list of items based on an unique tile name
+    filtered_items    = get_unique_STAC_items(one_granule_items)         # Remain only one item from those that share the same timestamp
+
+    return get_granule_mosaic(SsrData, filtered_items, StartStr, EndStr, criteria['bands'], ProjStr, Scale, ExtraBandCode)
+  
+
+  def merge_granule_mosaics(granule_mosaics, base_img):
+    count = 0
+    for mosaic in granule_mosaics:
+      if mosaic is not None:
+        mosaic = mosaic.reindex_like(base_img)   # do not apply any value to "method" parameter, just default value
+        mask   = mosaic[eoIM.pix_score] > base_img[eoIM.pix_score]
+        for var in base_img.data_vars:
+          base_img[var] = base_img[var].where(~mask, mosaic[var], True)
+      
+        count += 1      
+        print('\n<<<<<<<<<< Complete %2dth sub mosaic >>>>>>>>>'%(count))  
+    
+    return base_img
+  
+  granule_mosaics = [mosaic_one_granule(granule, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale) for granule in unique_granules]
+
+  merged_result = dask.delayed(merge_granule_mosaics)(granule_mosaics, base_img)
+
+  final_mosaic = merged_result.compute()
+
+  #==========================================================================================================
+  # Mask out the pixels with negative date value
+  #========================================================================================================== 
+  final_mosaic = final_mosaic.where(final_mosaic[eoIM.pix_date] > 0)
+
+  mosaic_stop = time.time()
+  mosaic_time = (mosaic_stop - mosaic_start)/60
+  print('\n\n<<<<<<<<<< The total elapsed time for generating the mosaic = %6.2f minutes>>>>>>>>>'%(mosaic_time))
+  
+  return final_mosaic
+
+
+
+
+
+def period_mosaic_old(inParams, ExtraBandCode):
+  '''
+    Args:
+      inParams(dictionary): A dictionary containing all necessary execution parameters;
+      ExtraBandCode(int): An integer indicating which kind of extra bands will be created as well.'''
+  
+  mosaic_start = time.time()  
+
+  #==========================================================================================================
+  # Confirm 'current_month' and 'current_tile' keys have valid values
+  #==========================================================================================================
+  StartStr, EndStr = eoPM.get_time_window(inParams)
+  if StartStr == None or EndStr == None:
+    print('\n<period_mosaic> Invalid time window was defined!!!')
+    return None
+  
+  Region = eoPM.get_spatial_region(inParams)
+  if Region == None:
+    print('\n<period_mosaic> Invalid spatial region was defined!!!')
+    return None
+  
+  #==========================================================================================================
+  # Prepare other required parameters and query criteria
+  #==========================================================================================================
+  ProjStr = str(inParams['projection']) if 'projection' in inParams else 'EPSG:3979'
+  Scale   = int(inParams['resolution']) if 'resolution' in inParams else 20
+
+  SsrData  = eoIM.SSR_META_DICT[str(inParams['sensor']).upper()]
+  criteria = get_query_conditions(SsrData, StartStr, EndStr)
+  
+  #==========================================================================================================
+  # Search all the STAC items based on a spatial region and a time window
+  # Note: (1) The third parameter (MaxImgs) for "search_STAC_Catalog" function cannot be too large. Otherwise,
+  #           a server internal error will be triggered.
+  #       (2) The imaging angles have been attached to each STAC item by "search_STAC_Catalog" function.
+  #==========================================================================================================  
+  stac_items = search_STAC_Catalog(Region, criteria, 100)
+
+  print(f"\n<period_mosaic> A total of {len(stac_items):d} items were found.\n")
+  display_meta_assets(stac_items)
+  
+  #mosaic = collection_mosaic(stac_items, inParams, ExtraBandCode)
+  #==========================================================================================================
+  # Create a base image that has full spatial dimensions covering ROI
+  #==========================================================================================================
+  base_img, used_time = get_base_Image(stac_items, Region, ProjStr, Scale, criteria, ExtraBandCode)
+  
+  print('\n<period_mosaic> based mosaic image = ', base_img)
+  print('\n<<<<<<<<<< Complete generating base image, elapsed time = %6.2f minutes>>>>>>>>>'%(used_time))  
+  
+  #==========================================================================================================
+  # Get a list of unique tile names and then loop through each unique tile to generate submosaic 
+  #==========================================================================================================  
+  unique_granules = get_unique_tile_names(stac_items)  #Get all unique tile names 
+  print('\n<<<<<< The number of unique granule tiles = %d'%(len(unique_granules)))  
+  print('\n<<<<<< The unique granule tiles = ', unique_granules) 
+
+  #==========================================================================================================
+  # Obtain the bbox in projected CRS system (x and y, rather than Lat and Lon)
   #==========================================================================================================  
   def mosaic_one_granule(granule_name, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale):
     one_granule_items = get_one_granule_items(stac_items, granule_name)  # Extract a list of items based on an unique tile name
@@ -1034,7 +1136,7 @@ def period_mosaic(inParams, ExtraBandCode):
   # cpu_cores = os.cpu_count()
   # print('\n\n The numb of CPU cores = ', cpu_cores)
 
-  # with concurrent.futures.ThreadPoolExecutor(max_workers=cpu_cores) as executor:
+  # with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
   #   futures = [executor.submit(mosaic_one_granule, granule, stac_items, SsrData, StartStr, EndStr, criteria, ProjStr, Scale) for granule in unique_granules]
   #   count = 0
   #   for future in concurrent.futures.as_completed(futures):
