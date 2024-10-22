@@ -322,7 +322,9 @@ def get_unique_tile_names(StacItems):
       unique_names[new_tile] = 1   
   
   sorted_keys = sorted(unique_names, key = lambda x: unique_names[x], reverse=True)
-
+  #sorted_dict = sorted(unique_names.items(), key=lambda x: x[1])
+  #print('<get_unique_tile_names>', sorted_dict)
+  
   return sorted_keys 
 
 
