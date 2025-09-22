@@ -1,3 +1,6 @@
+import json
+
+
 CAN_FULL_TILES = {
 'tile13':{'type': 'Polygon', 'coordinates': [[[-147.465, 81.4841], [-123.879, 74.9631], [-91.1246, 76.6016], [-86.4478, 84.4004], [-147.465, 81.4841]]]},
 'tile14':{'type': 'Polygon', 'coordinates': [[[-86.4478, 84.4004], [-91.1246, 76.6016], [-60.1588, 74.0912], [-35.5785, 80.1407], [-86.4478, 84.4004]]]},
@@ -405,9 +408,50 @@ def get_tile_polygon(inTileName):
   if valid_tile_name(inTileName):
     tile_name = str(inTileName)
     name_len = len(tile_name)
-
     if name_len > 7:
-      return CAN_SUBTILES[tile_name]    
-
+      return CAN_SUBTILES[tile_name]
     else:
       return CAN_FULL_TILES[tile_name]
+  else:
+    return None  
+  
+
+#############################################################################################################
+# Description: This function returns a polygon corresponding to a given tile name
+#
+# Revision history:  2024-Jun-05  Lixin Sun  Initial creation
+#
+#############################################################################################################
+def get_tile_geojson(inTileName):
+  tile_polygon = get_tile_polygon(inTileName)
+
+  if tile_polygon == None:
+    return None
+  
+  # Convert to GeoJSON FeatureCollection
+  return {"type": "FeatureCollection",
+          "features": [
+                  {"type": "Feature",
+                   "properties": {},
+                   "geometry": tile_polygon}]}
+  
+
+#############################################################################################################
+# Description: This function returns a list of sub-tile names corresponding to a given full tile name
+#
+# Revision history:  2024-Nov-29  Lixin Sun  Initial creation
+#
+#############################################################################################################
+def get_subtile_names(inTileName, sub_level = 9):
+  if valid_tile_name(inTileName):
+    tile_name = str(inTileName)
+    name_len  = len(tile_name)
+
+    if name_len < 7:
+      sub_numbs      = ['_411', '_412', '_421', '_422'] if sub_level < 5 else ['_911', '_912', '_913', '_921', '_922', '_923', '_931', '_932', '_933']
+      return [inTileName + sub_numb for sub_numb in sub_numbs]
+    else:
+      None
+  else:
+    return None  
+  

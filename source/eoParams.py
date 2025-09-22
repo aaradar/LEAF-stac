@@ -1,8 +1,15 @@
+import os
+import re
+import json
+import pyproj
+import sys
+import netrc
+import argparse
+import subprocess
 import eoImage as eoIM
 import eoUtils as eoUs
-import eoTileGrids as eoTG
 from pathlib import Path
-
+import eoTileGrids as eoTG
 from datetime import datetime
 
 #############################################################################################################
@@ -36,11 +43,98 @@ from datetime import datetime
 
 
 
-all_param_keys = ['sensor', 'unit', 'year', 'nbYears', 'months', 'tile_names', 'prod_names', 
+all_param_keys = ['sensor', 'ID', 'unit', 'bands', 'year', 'nbYears', 'months', 'tile_names', 'prod_names', 
                   'out_location', 'resolution', 'GCS_bucket', 'out_folder', 'export_style', 'projection', 'CloudScore',
-                  'monthly', 'start_dates', 'end_dates', 'regions', 'scene_ID', 'current_time', 'current_region', 'time_str']
+                  'monthly', 'start_dates', 'end_dates', 'regions', 'scene_ID', 'current_time', 'current_region', 'time_str','cloud_cover',
+                  'StartStr', 'EndStr', 'Region', 'SsrData', 'Criteria', 'IncludeAngles', 'debug', 'entire_tile',
+                  'nodes', 'node_memory', 'number_workers', 'account']
 
 
+#############################################################################################################
+# Description: This function returns a collection of images from a specified catalog and collection based on
+#              given spatial region, timeframe and filtering criteria. The returned image collection will be 
+#              stored in a xarray.Dataset structure.
+#
+# Note: (1) It seems that you can retrieve catalog info on AWS Landsat collection, but cannot access assets.
+#
+# Revision history:  2024-May-24  Lixin Sun  Initial creation
+# 
+#############################################################################################################
+def get_query_conditions(inParams, StartStr, EndStr, CloudThresh):  
+  #==================================================================================================
+  # Create a filter for the search based on metadata. The filtering params will depend upon the 
+  # image collection we are using. e.g. in case of Sentine-2 L2A, we can use params such as: 
+  #
+  # eo:cloud_cover
+  # s2:dark_features_percentage
+  # s2:cloud_shadow_percentage
+  # s2:vegetation_percentage
+  # s2:water_percentage
+  # s2:not_vegetated_percentage
+  # s2:snow_ice_percentage, etc.
+  # 
+  # For many other collections, the Microsoft Planetary Computer has a STAC server at 
+  # https://planetarycomputer-staging.microsoft.com/api/stac/v1 (this info comes from 
+  # https://www.matecdev.com/posts/landsat-sentinel-aws-s3-python.html)
+  #==================================================================================================
+  SsrData    = inParams['SsrData']
+  ssr_code   = SsrData['SSR_CODE']
+  resolution = inParams['resolution']
+
+  query_conds = {}  
+  HLS_angle_bands = ['SZA', 'SAA', 'VZA', 'VAA']
+
+  if ssr_code > eoIM.MAX_LS_CODE and ssr_code < eoIM.MOD_sensor:
+    query_conds['catalog']    = "https://earth-search.aws.element84.com/v1"
+    query_conds['collection'] = ["sentinel-2-l2a"]
+    query_conds['timeframe']  = str(StartStr) + '/' + str(EndStr)
+    query_conds['filters']    = {"eo:cloud_cover": {"lt": CloudThresh} }
+    
+    if 'bands' not in inParams:
+      query_conds['bands'] = SsrData['ALL_BANDS'] + ['scl'] if resolution > 15 else SsrData['SIX_BANDS'] + ['scl'] 
+    else : 
+      required_bands = SsrData['ALL_BANDS'] + ['scl'] if resolution > 15 else SsrData['SIX_BANDS'] + ['scl'] 
+      for band in inParams['bands']:
+          if band.lower() not in [b.lower() for b in required_bands]: 
+              required_bands.append(band)
+      # Remove duplicates
+      required_bands = list(set(band.lower() for band in required_bands))
+      query_conds['bands']  = required_bands
+
+  elif ssr_code < eoIM.MAX_LS_CODE and ssr_code > 0:
+    query_conds['catalog']    = "https://earth-search.aws.element84.com/v1"
+    query_conds['collection'] = ["landsat-c2-l2"]
+    query_conds['timeframe']  = str(StartStr) + '/' + str(EndStr)
+    query_conds['bands']      = ['blue', 'green', 'red', 'nir08', 'swir16', 'swir22', 'qa_pixel']
+    query_conds['filters']    = {"eo:cloud_cover": {"lt": CloudThresh}}  
+  
+  elif ssr_code > eoIM.MOD_sensor and resolution > 25:
+    if ssr_code == eoIM.HLSS30_sensor:
+      query_conds['collection'] = ["HLSS30_2.0"]
+      query_conds['bands']      = {'S2': ['B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'B08', 'B11', 'B12', 'Fmask'],
+                                   'LS': ['B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'Fmask'],
+                                   'angle': HLS_angle_bands}
+    elif ssr_code == eoIM.HLSL30_sensor:
+      query_conds['collection'] = ["HLSL30_2.0"]
+      query_conds['bands']      = {'S2': ['B02', 'B03', 'B04', 'B08', 'B11', 'B12', 'Fmask'],
+                                   'LS': ['B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'Fmask'],
+                                   'angle': HLS_angle_bands}
+        
+    elif ssr_code == eoIM.HLS_sensor:
+      query_conds['collection'] = ["HLSS30_2.0", "HLSL30_2.0"]
+      query_conds['bands']      = {'S2': ['B02', 'B03', 'B04', 'B08', 'B11', 'B12', 'Fmask'],
+                                   'LS': ['B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'Fmask'],
+                                   'angle': HLS_angle_bands}
+      
+    query_conds['catalog']   = "https://cmr.earthdata.nasa.gov/stac/LPCLOUD"
+    query_conds['timeframe'] = str(StartStr) + '/' + str(EndStr)    
+    query_conds['filters']   = {"eo:cloud_cover": {"lt": CloudThresh}}  
+
+  else:
+    print('<get_query_conditions> Wrong sensor code or spatial resolution was specified!')
+    return None
+  
+  return query_conds
 
 
 #############################################################################################################
@@ -50,6 +144,7 @@ all_param_keys = ['sensor', 'unit', 'year', 'nbYears', 'months', 'tile_names', '
 #
 #############################################################################################################
 def has_custom_region(inParams):  
+  
   nRegions = len(inParams['regions']) if 'regions' in inParams else 0
   
   if 'scene_ID' not in inParams:
@@ -118,7 +213,7 @@ def set_current_time(inParams, current_time):
   if inParams['monthly']:
     inParams['time_str'] = eoIM.get_MonthName(int(inParams['months'][current_time]))
   else:  
-    inParams['time_str'] = str(inParams['start_dates'][current_time]) + '_' + str(inParams['end_dates'][current_time])
+    inParams['time_str'] = str(inParams['start_dates'][current_time]) + '_' + str(inParams['end_dates'][-1])
 
   return inParams
 
@@ -157,47 +252,50 @@ def set_spatial_region(inParams, region_name):
 # Description: This function fills default values for some critical parameters
 # 
 # Revision history:  2024-Oct-08  Lixin Sun  Initial creation
-#
+#                    2025-Jan-22  Lixin Sun  Added 'IncludeAngles' key and its default value (False)
 #############################################################################################################
-def fill_critical_params(inParams):  
-  if 'sensor' not in inParams:
-    inParams['sensor'] = 'S2_SR'
+# def fill_critical_params(inParams):  
+#   if 'sensor' not in inParams:
+#     inParams['sensor'] = 'S2_SR'
 
-  if 'year' not in inParams:
-    inParams['year'] = datetime.now().year
+#   if 'year' not in inParams:
+#     inParams['year'] = datetime.now().year
 
-  if 'nbYears' not in inParams:
-    inParams['nbYears'] = 1
+#   if 'nbYears' not in inParams:
+#     inParams['nbYears'] = 1
   
-  if 'prod_names' not in inParams:
-    inParams['prod_names'] = []
+#   if 'prod_names' not in inParams:
+#     inParams['prod_names'] = []
   
-  if 'out_location' not in inParams:
-    inParams['out_location'] = 'drive'
+#   if 'out_location' not in inParams:
+#     inParams['out_location'] = 'drive'
  
-  if 'resolution' not in inParams:
-    inParams['resolution'] = 30
+#   if 'resolution' not in inParams:
+#     inParams['resolution'] = 30
   
-  if 'out_folder' not in inParams:
-    inParams['out_folder'] = inParams['sensor'] + '_' + inParams['year'] + '_results' 
+#   if 'out_folder' not in inParams:
+#     inParams['out_folder'] = inParams['sensor'] + '_' + inParams['year'] + '_results' 
 
-  if 'months' not in inParams:
-    inParams['months'] = []
+#   if 'months' not in inParams:
+#     inParams['months'] = []
 
-  if 'tile_names' not in inParams:
-    inParams['tile_names'] = []
+#   if 'tile_names' not in inParams:
+#     inParams['tile_names'] = []
 
-  if 'export_style' not in inParams:
-    inParams['export_style'] = 'separate'
+#   if 'export_style' not in inParams:
+#     inParams['export_style'] = 'separate'
 
-  if 'projection' not in inParams:
-    inParams['projection'] = 'EPSG:3979'
+#   if 'projection' not in inParams:
+#     inParams['projection'] = 'EPSG:3979'
   
-  sensor_type = inParams['sensor'].lower()
-  if sensor_type.find('s2') < 0:
-    inParams['CloudScore'] = False 
+#   if 'IncludeAngles' not in inParams:
+#     inParams['IncludeAngles'] = False
 
-  return inParams
+#   sensor_type = inParams['sensor'].lower()
+#   if sensor_type.find('s2') < 0:
+#     inParams['CloudScore'] = False 
+
+#   return inParams
 
 
 
@@ -224,77 +322,159 @@ def valid_user_params(UserParams):
       print('<valid_user_params> \'{}\' key in given parameter dictionary is invalid!'.format(user_keys[index]))
   
   if not all_valid:
-    return all_valid, None
-  
-  #==========================================================================================================
-  # Fill default values for some critical parameters as necessary
-  #==========================================================================================================
-  out_Params = fill_critical_params(UserParams)
+    return all_valid, None  
 
   #==========================================================================================================
   # Validate values of critical parameters
-  #==========================================================================================================
-  sensor_name = str(out_Params['sensor']).upper()
-  all_SSRs = ['S2_SR', 'L5_SR', 'L7_SR', 'L8_SR', 'L9_SR']
-  if sensor_name not in all_SSRs:
-    all_valid = False
-    print('<valid_user_params> Invalid sensor or unit was specified!')
+  #==========================================================================================================  
+  outParams = UserParams
 
-  year = int(out_Params['year'])
-  if year < 1970 or year > datetime.now().year:
-    all_valid = False
-    print('<valid_user_params> Invalid year was specified!')
-
-  nYears = int(out_Params['nbYears'])
-  if nYears > 3:
-    all_valid = False
-    print('<valid_user_params> Invalid number of years was specified!')
-
-  prod_names = out_Params['prod_names']
-  nProds = len(prod_names)
-  if nProds < 1:
-    all_valid = False
-    print('<valid_user_params> No product name was specified for prod_names key!')
-  
-  valid_prod_names = ['LAI', 'fAPAR', 'fCOVER', 'Albedo', 'mosaic', 'QC', 'date', 'partition']
-  presence = [element in valid_prod_names for element in prod_names]
-  if False in presence:
-    all_valid = False
-    print('<valid_user_params> At least one of the specified products is invalid!')
-  
-  valid_out_locations = ['DRIVE', 'STORAGE', 'ASSET']
-  out_location = str(out_Params['out_location']).upper()  
-  if out_location not in valid_out_locations:
-    all_valid = False
-    print('<valid_user_params> Invalid out location was specified!')
-
-  resolution = int(out_Params['resolution'])
-  if resolution < 1:
-    all_valid = False
-    print('<valid_user_params> Invalid spatial resolution was specified!')
-
-  out_folder = str(out_Params['out_folder'])
-  if Path(out_folder) == False or len(out_folder) < 2:
-    all_valid = False
-    print('<valid_user_params> The specified output path is invalid!')
-
-  max_month = max(out_Params['months'])
-  if max_month > 12:
-    all_valid = False
-    print('<valid_user_params> Invalid month number was specified!')
-
-  tile_names = out_Params['tile_names']
-  nTiles = len(tile_names)
-  if nTiles < 1:
-    all_valid = False
-    print('<valid_user_params> No tile name was specified for tile_names key!')
-  
-  for tile in tile_names:
-    if eoTG.valid_tile_name(tile) == False:
+  # Fill or valid 'sensor' parameter
+  if 'sensor' not in outParams:
+    outParams['sensor'] = 'S2_SR'
+  else:  
+    sensor_name = str(outParams['sensor']).upper()
+    all_SSRs = ['S2_SR', 'HLSS30_SR', 'HLSL30_SR', 'HLS_SR', 'L5_SR', 'L7_SR', 'L8_SR', 'L9_SR']
+    if sensor_name not in all_SSRs:
       all_valid = False
-      print('<valid_user_params> {} is an invalid tile name!'.format(tile))
+      print('<valid_user_params> Invalid sensor or unit was specified!')
   
-  return all_valid, out_Params
+  # Fill or valid 'year' parameter
+  if 'year' not in outParams:
+    outParams['year'] = datetime.now().year
+  else:  
+    year = int(outParams['year'])
+    if year < 1970 or year > datetime.now().year:
+      all_valid = False
+      print('<valid_user_params> Invalid year was specified!')
+
+  # Fill or valid 'bands' parameter
+  if 'bands' in outParams:
+    bands = outParams['bands']
+    valid_bands = eoIM.SSR_META_DICT[str(outParams['sensor']).upper()]["ALL_BANDS"]
+    for band in bands:
+      if band.lower() not in valid_bands:
+        all_valid = False
+        print(f'<valid_user_params> Invalid band name, {band}, was specified!')
+    outParams['bands'] = [band.lower() for band in bands]
+  
+  # Fill or valid 'nbYears' parameter
+  if 'nbYears' not in outParams:
+    outParams['nbYears'] = 1
+  else:  
+    if int(outParams['nbYears']) > 3:
+      all_valid = False
+      print('<valid_user_params> Invalid number of years was specified!')
+
+  # Fill or valid 'prod_names' parameter
+  if 'prod_names' not in outParams:
+    outParams['prod_names'] = []
+  else:  
+    prod_names = outParams['prod_names']
+    nProds = len(prod_names)
+    if nProds < 1:
+      all_valid = False
+      print('<valid_user_params> No product name was specified for prod_names key!')
+  
+    valid_prod_names = ['LAI', 'fAPAR', 'fCOVER', 'Albedo', 'mosaic', 'QC', 'date', 'partition']
+    presence = [element in valid_prod_names for element in prod_names]
+    if False in presence:
+      all_valid = False
+      print('<valid_user_params> At least one of the specified products is invalid!')
+  
+  # Fill or valid 'out_location' parameter
+  if 'out_location' not in outParams:
+    outParams['out_location'] = 'drive'
+  else:  
+    out_location = str(outParams['out_location']).upper()  
+    if out_location not in ['DRIVE', 'STORAGE', 'ASSET']:
+      all_valid = False
+      print('<valid_user_params> Invalid out location was specified!')
+
+  # Fill or valid 'resolution' parameter
+  if 'resolution' not in outParams:
+    outParams['resolution'] = 30
+  else:  
+    resolution = int(outParams['resolution'])
+    if resolution < 1:
+      all_valid = False
+      print('<valid_user_params> Invalid spatial resolution was specified!')
+    elif resolution < 15:  #For high resolution, angle bands should not be included
+      outParams['IncludeAngles'] = False
+      if 's2' not in str(sensor_name).lower():
+        print(f'<valid_user_params> {resolution}m resolution images are only available in Sentinel-2 catalog of AWS!')
+        all_valid = False
+  
+  # Fill or valid 'out_folder' parameter
+  if 'out_folder' not in outParams:
+    outParams['out_folder'] = outParams['sensor'] + '_' + outParams['year'] + '_results' 
+  else:
+    out_folder = str(outParams['out_folder'])
+    if Path(out_folder) == False or len(out_folder) < 2:
+      all_valid = False
+      print('<valid_user_params> The specified output path is invalid!')
+  
+  # Fill or valid 'months' parameter
+  if 'months' not in outParams:
+    outParams['months'] = []
+  else:      
+    max_month = max(outParams['months'])
+    if max_month > 12:   #month number < 1 means an entire peak season 
+      all_valid = False
+      print('<valid_user_params> Invalid month number was specified!')
+
+  # Fill or valid 'tile_names' parameter
+  if 'tile_names' not in outParams:
+    outParams['tile_names'] = []
+  else:
+    if outParams['tile_names'] is not None:
+      tile_names = outParams['tile_names']
+      nTiles = len(tile_names)
+      if nTiles < 1:
+        all_valid = False
+        print('<valid_user_params> No tile name was specified for tile_names key!')
+
+      for tile in tile_names:
+        if eoTG.valid_tile_name(tile) == False:
+          all_valid = False
+          print('<valid_user_params> {} is an invalid tile name!'.format(tile))
+
+    else:
+      region_coords = outParams['regions']['coordinates'][0]
+      for point in region_coords:
+          lon, lat = point
+          if not (-180 <= lon <= 180):
+            print('<valid_user_params> Longitude {} is out of bounds. Must be between -180 and 180.'.format(lon))
+          if not (-90 <= lat <= 90):
+            print('<valid_user_params> Latitude {} is out of bounds. Must be between -90 and 90.'.format(lon))
+      
+      if len(region_coords) != 5 or region_coords[0] != region_coords[-1]:
+          raise ValueError("Coordinates must be a closed polygon with 5 points (first equals last).")
+  
+  # Fill or valid 'cloud_cover' parameter
+  if 'cloud_cover' not in outParams:
+    outParams['cloud_cover'] = 80
+  else:
+    cloud_cover = outParams['cloud_cover']
+    if cloud_cover > 100 or cloud_cover < 0:
+      outParams['cloud_cover'] = 80
+
+  # Fill or valid 'export_style' parameter
+  if 'export_style' not in outParams:
+    outParams['export_style'] = 'separate'
+  
+  if 'projection' not in outParams:
+    outParams['projection'] = 'EPSG:3979'
+  
+  if 'IncludeAngles' not in outParams:
+    outParams['IncludeAngles'] = False  
+
+  sensor_type = outParams['sensor'].lower()
+  if sensor_type.find('s2') < 0:
+    outParams['CloudScore'] = False 
+
+  # validate region
+  return all_valid, outParams
 
 
 
@@ -307,6 +487,7 @@ def valid_user_params(UserParams):
 #
 #############################################################################################################
 def form_time_windows(inParams):
+
   if not has_custom_window(inParams):
     inParams['monthly'] = True
     nMonths = len(inParams['months'])  # get the number of specified months
@@ -325,11 +506,6 @@ def form_time_windows(inParams):
 
   else:
     inParams['monthly'] = False
-    # nStarts = len(inParams['start_dates'])
-    # nEnds   = len(inParams['end_dates'])
-
-    # if nStarts != nEnds:
-    #   print('<form_time_windows>')
 
   return set_current_time(inParams, 0)
   
@@ -352,8 +528,11 @@ def form_spatial_regions(inParams):
         inParams['regions'][tile_name] = eoTG.get_tile_polygon(tile_name)
     
     return set_spatial_region(inParams, inParams['tile_names'][0])  
-  
   else:
+    if inParams['tile_names'] is None and inParams['ID']  is None:
+      inParams['current_region'] = f"custom_TL{int(inParams['regions']['coordinates'][0][0][0])}_BR{int(inParams['regions']['coordinates'][0][3][0])}"
+    elif inParams['tile_names'] is None and inParams['ID'] is not None: 
+      inParams['current_region'] = inParams['ID']
     return inParams
 
 
@@ -383,7 +562,6 @@ def update_default_params(inParams):
   # will be dealed with as customized time windows.    
   #==========================================================================================================
   out_Params = form_time_windows(out_Params)  
- 
   #==========================================================================================================
   # If only regular tile names are specified, then create a dictionary with tile names and their 
   # corresponding 'ee.Geometry.Polygon' objects as keys and values, respectively.   
@@ -402,23 +580,81 @@ def update_default_params(inParams):
 #############################################################################################################
 def get_LEAF_params(inParams):
   out_Params = update_default_params(inParams)  # Modify default parameters with given ones  
-  out_Params['unit'] = 2                     # Always surface reflectance for LEAF production
+  out_Params['unit'] = 2                        # Always surface reflectance for LEAF production
+  out_Params['IncludeAngles'] = True            # Imaging geometry angles must be always included   
+
+  return out_Params  
+
+
+
+
+#############################################################################################################
+# Description: This function returns a parameter dictionary for generating a single composite image 
+#              (ONE combination of time windows and spatial regions).
+#
+# Revision history:  2024-Oct-24  Lixin Sun  Initial creation
+#                                 Lixin Sun  Adjusted for spatial resolution of 10m  
+#############################################################################################################
+def get_mosaic_params(ProdParams, CompParams):
+  '''
+     Args:
+        ProdParams(Dictionary): A dictionary containing all parameters related to composite image production;
+        CompParams(Dictionary): A dictionary containing all parameters related to used computing environment.'''
   
-  return out_Params  
+  if ProdParams is None or CompParams is None:
+    print('<get_mosaic_params> Either "ProdParams" or "CompParams" is missing!')
+    return None
+  
+  outParams = update_default_params(ProdParams)  # Modify default parameter dictionary with a given one
+  if outParams is None:
+    return None
+  
+  outParams['prod_names'] = ['mosaic']         # Of course, product name should be always 'mosaic'
 
+  #==========================================================================================================
+  # Get ONE valid time window and ONE valid spatial region, respectively
+  #==========================================================================================================
+  StartStr, EndStr = get_time_window(ProdParams)
+  if StartStr is None or EndStr is None:
+    print('\n<get_mosaic_params> Invalid time window was defined!!!')
+    return None
+  else:
+    outParams['StartStr'] = StartStr
+    outParams['EndStr']   = EndStr
 
+  if ProdParams['tile_names'] is not None:
+    Region = get_spatial_region(ProdParams)
+  else:
+    Region = ProdParams['regions']
+  
+  if Region is None:
+    print('\n<get_mosaic_params> Invalid spatial region was defined!!!')
+    return None
+  else: 
+    outParams['Region'] = Region
 
+  #==========================================================================================================
+  # Prepare other required parameters and query criteria
+  #==========================================================================================================
+  outParams['projection']  = str(ProdParams['projection']) if 'projection' in ProdParams else 'EPSG:3979'
+  outParams['resolution']  = int(ProdParams['resolution']) if 'resolution' in ProdParams else 20
+  outParams['SsrData']     = eoIM.SSR_META_DICT[str(ProdParams['sensor']).upper()]
 
-#############################################################################################################
-# Description: Obtain a parameter dictionary for Mosaic tool
-#############################################################################################################
-def get_mosaic_params(inParams):
-  out_Params = update_default_params(inParams)  # Modify default parameter dictionary with a given one 
+  ssr_code = outParams['SsrData']['SSR_CODE']
+  if outParams['resolution'] < 15 and (ssr_code < eoIM.MAX_LS_CODE or ssr_code > eoIM.S2B_sensor):
+    print('<get_mosaic_params> Specified spatial resolution does not match sensor type!') 
+    return None
 
-  # Of course, product name should be always 'mosaic'  
-  out_Params['prod_names'] = ['mosaic', 'date'] if 'date' in out_Params['prod_names'] else ['mosaic'] 
+  outParams['Criteria'] = get_query_conditions(outParams, StartStr, EndStr, outParams['cloud_cover'])
 
-  return out_Params  
+  #==========================================================================================================
+  # Merge CompParams into "outParams"
+  #==========================================================================================================
+  for key, value in CompParams.items():
+    outParams.update({key: value})
+
+  return outParams
+
 
 
 
@@ -433,44 +669,71 @@ def get_LC_params(inParams):
   return out_Params 
 
 
+#############################################################################################################
+# Description: Obtain the cloud cover from input dictionary
+#############################################################################################################
+def get_cloud_coverage(inParams):
+  return inParams['cloud_cover']
 
 
 #############################################################################################################
-# Description: This function returns a valid spatial region defined in parameter dictionary.
+# Description: This function returns ONE valid spatial region defined in parameter dictionary.
 # 
 # Revision history:  2024-Feb-27  Lixin Sun  Initial creation
 #
 #############################################################################################################
 def get_spatial_region(inParams):
+  '''Returns ONE valid spatial region defined in parameter dictionary.
+     Args:
+        inParams(Dictionary): A dictionary containing all required input parameters.
+  '''
+
+  #==========================================================================================================
+  # Confirm required key:value pairs are defined
+  #==========================================================================================================  
   if 'current_region' not in inParams or 'regions' not in inParams:
     print('\n<get_spatial_region> one of required keys is not exist!!')
     return None
 
+  #==========================================================================================================
+  # Extract 'current_region'
+  #==========================================================================================================
   reg_name        = inParams['current_region']
   valid_reg_names = inParams['regions'].keys()
-
-  if reg_name in valid_reg_names:
-    return inParams['regions'][reg_name]
-  else:
-    print('\n<get_spatial_region> Invalid spatial region name provided!')
-    return None
+  if inParams['tile_names'] is not None:
+    if reg_name in valid_reg_names:
+      return inParams['regions'][reg_name]
+    else:
+      print('\n<get_spatial_region> Invalid spatial region name provided!')
+      return None
 
 
 
 
 
 #############################################################################################################
-# Description: This function returns a valid time window defined in parameter dictionary.
+# Description: This function returns ONE valid time window defined in parameter dictionary.
 # 
 # Revision history:  2024-Feb-27  Lixin Sun  Initial creation
-#                    2024-Sep-03  Lixin Sun  Added 'AutoIncr' input parameter so that the value 
-#                                            corresponding to 'current_time' is increased automatically. 
+#                    2024-Sep-03  Lixin Sun  Added 'current_time' input parameter so that a specific time
+#                                            window can be identified. 
 #############################################################################################################
 def get_time_window(inParams):
+  '''Returns ONE valid time window defined in parameter dictionary.
+     Args:
+        inParams(dictionary): A dictionary containing all required input parameters.
+  '''
+  
+  #==========================================================================================================
+  # Confirm required key:value pairs are defined
+  #==========================================================================================================
   if 'current_time' not in inParams or 'start_dates' not in inParams or 'end_dates' not in inParams:
     print('\n<get_time_window> one of required keys is not exist!!')
     return None, None
 
+  #==========================================================================================================
+  # Extract 'current_time'
+  #==========================================================================================================
   current_time = inParams['current_time']
   nDates       = len(inParams['start_dates'])
     
@@ -479,30 +742,292 @@ def get_time_window(inParams):
     return None, None
 
   start = inParams['start_dates'][current_time]
-  end   = inParams['end_dates'][current_time]
-  
+  end   = inParams['end_dates'][-1]
   return start, end
 
 
+def form_inputs(ProdParams = None, CompParams = None):
+  if ProdParams is not None and CompParams is not None:
+    return ProdParams, CompParams
+  else:
+    return cmd_arguments()
 
 
+def cmd_arguments(argv=None):    
+  """
+  Parse command line arguments.
+  """
+  
+  parser = argparse.ArgumentParser(
+      usage="%(prog)s [-h HELP] use -h to get supported arguments.",
+      description="Mosaic High-resolution imagery using STAC and Xarray",
+  )
+  parser.add_argument(
+      '-s', '--sensor', 
+      type=str, 
+      default='S2_SR', 
+      choices=['S2_SR','HLSS30_SR', 'HLSL30_SR', 'HLS_SR'], 
+      help="Sensor type (e.g., 'S2_SR', 'HLSS30_SR', 'HLSL30_SR', 'HLS_SR')"
+  )
+  parser.add_argument(
+    '-b', '--bands', 
+    type=str, 
+    nargs='+', 
+    default=[], 
+    help="The name of extra requested bands. "
+  )
+  parser.add_argument(
+      '-cl', '--cloud_cover', 
+      type=int, 
+      default=85.0, 
+      help="Cloud cover "
+  )
+  parser.add_argument(
+      '-u', '--unit', 
+      type=int, 
+      default=2,  
+      choices=[1, 2], 
+      help="Data unit code (1 for TOA, 2 for surface reflectance)"
+  )
+  parser.add_argument(
+      '-y', '--year', 
+      type=int, 
+      help="Image acquisition year"
+  )
+  parser.add_argument(
+      '-nby', '--nbyears', 
+      type=int, 
+      default=-1, 
+      help="Positive integer for annual product, or negative for monthly product"
+  )
+  parser.add_argument(
+      '-m', '--months', 
+      type=int, 
+      nargs='+', 
+      choices=range(1, 13), 
+      help="List of months included in the product (e.g., 5 6 7 8 9 10)"
+  )
+  parser.add_argument(
+      '-sd', '--start_dates', 
+      type=str, 
+      default="", 
+      nargs='+', 
+      help="List of start dates (e.g., '2023-05-01')"
+  )
+  parser.add_argument(
+      '-ed', '--end_dates', 
+      type=str, 
+      default="", 
+      nargs='+', 
+      help="List of end dates (e.g., '2023-10-30')"
+  )
+  parser.add_argument(
+      '-t', '--tile_names', 
+      type=str, 
+      nargs='+', 
+      help="List of (sub-)tile names"
+  )
+  parser.add_argument(
+      '-pn', '--prod_names', 
+      type=str, 
+      nargs='+', 
+      default=['LAI', 'fCOVER', 'fAPAR', 'Albedo'], 
+      help="List of product names (e.g., 'mosaic', 'LAI', 'fCOVER')"
+  )
+  parser.add_argument(
+      '-r', '--resolution', 
+      type=int, 
+      default=20, 
+      help="Spatial resolution (default: 20)"
+  )
+  parser.add_argument(
+      '-o', '--out_folder', 
+      type=str, 
+      help="Folder name for exporting results"
+  )
+  parser.add_argument(
+      '-proj', '--projection', 
+      type=str, 
+      default='EPSG:3979', 
+      help="Projection (e.g., 'EPSG:3979')"
+  )
+  parser.add_argument(
+      '-d', '--debug', 
+      action='store_true', 
+      help="Run the program in debug mode. Creates a single-node Dask cluster."
+  )
+  parser.add_argument(
+      '-et', '--entire_tile', 
+      action='store_true', 
+      help="Mosaic the entire tile. Program will run for all 9 subtile sections."
+  )
+  parser.add_argument(
+      '-ang', '--include_angles', 
+      action='store_true', 
+      help="Whether to include angle bands in the Mosicking process or not."
+  )
+  parser.add_argument(
+      '-nw', '--number_workers', 
+      type=int, 
+      default=1, 
+      help="Number of Dask workers. Set based on available cores and nodes."
+  )
+  parser.add_argument(
+      '-nm', '--node_memory', 
+      type=str, 
+      default=-1, 
+      help="Memory allocated for each Dask worker."
+  )
+  parser.add_argument(
+      '-n', '--nodes', 
+      type=int, 
+      default=1, 
+      help="Number of physical nodes for distributed Dask mode"
+  )
+  parser.add_argument(
+      '-rlat', '--region_lat', 
+      type=float, 
+      nargs='+', 
+      help="The latitude of the region of interest in the following order: Top-left, Top-right, Bottom-right, and Bottom-left. "
+  )
+  parser.add_argument(
+    '-rlon', '--region_lon', 
+    type=float, 
+    nargs='+', 
+    help="The longitude of the region of interest in the following order: Top-left, Top-right, Bottom-right, and Bottom-left. "
+  )
+  parser.add_argument(
+    '-rc', '--region_catalog', 
+    type = str, 
+    default=None,
+    help="The STAC Catalog Json file for the desired Region of interest. "
+  )
 
-# params =  {
-#      'sensor': 'S2_SR',           # A sensor type string (e.g., 'S2_SR' or 'L8_SR')
-#      'unit': 2,                   # A data unit code (1 or 2 for TOA or surface reflectance)   
-#      'year': 2023,                # An integer representing image acquisition year
-#      'nbYears': 1,                # positive int for annual product, or negative int for monthly product
-#      'months': [7, 6, 8],               # A list of integers represening one or multiple monthes     
-#      'tile_names': ['tile23'],    # A list of (sub-)tile names (defined using CCRS' tile griding system) 
-#      'prod_names': ['mosaic'],          #['mosaic', 'LAI', 'fCOVER', ]
-#      'out_location': 'drive',        # Exporting location ('drive', 'storage' or 'asset') 
-#      'resolution': 30,            # Exporting spatial resolution
-#      'GCS_bucket': 's2_mosaic_2020',  # An unique bucket name on Google Cloud Storage
-#      'out_folder': 'water_samples_May10',   # the folder name for exporting
+  args = parser.parse_args()
+  
+  sensor     = args.sensor
+  region_lat =  args.region_lat
+  region_lon =  args.region_lon
+  region_catalog     = args.region_catalog 
+  bands      = args.bands
+  nbyears    = args.nbyears
+  cloud_cover= args.cloud_cover
+  year       = args.year
+  unit       = args.unit
+  months     = args.months
+  tile_names = args.tile_names
+  prod_names = args.prod_names 
+  resolution = args.resolution 
+  out_folder = args.out_folder
+  projection = args.projection
+  start_dates  = args.start_dates
+  end_dates    = args.end_dates
+  debug        = args.debug
+  IncludeAngles = args.include_angles
+  entire_tile  = args.entire_tile
+  number_workers = args.number_workers
+  nodes          = args.nodes if not debug else 1
+  node_memory    = args.node_memory
+  
+  region_cr = {}
+  id_custom = None
 
-#      'start_dates': [],
-#      'end_dates': []
-# }
+  if region_catalog is not None:
+    
+    # Open the file and load the JSON content
+    with Path(region_catalog).open('r') as region_catalog:
+      
+      region_data = json.load(region_catalog)
+      region_cr = region_data["geometry"]
+    
+  
+  if region_lon is not None and len(region_cr) == 0:
+    if len(region_lon) == 4 and len(region_lat) == 4:
+      region_cr = {
+        'type': 'Polygon',
+        'coordinates': [[
+            [float(region_lon[0]), float(region_lat[0])],
+            [float(region_lon[1]), float(region_lat[1])],
+            [float(region_lon[2]), float(region_lat[2])],
+            [float(region_lon[3]), float(region_lat[3])],
+            [float(region_lon[0]), float(region_lat[0])]  
+        ]]
+      }
+  
 
+  prod_params = {
+      "sensor" : sensor,
+      "ID" : id_custom,
+      "bands" : bands,
+      "regions" : region_cr,
+      "unit" : unit, 
+      "year" : year,
+      "cloud_cover" : cloud_cover,
+      "nbYears" : nbyears,
+      "months" : months,
+      "tile_names" : tile_names,
+      "prod_names" : prod_names,
+      "resolution" : resolution,
+      "out_folder" : out_folder,
+      "projection" : projection,
+      "IncludeAngles" : IncludeAngles,
+  }
+  if 'end_dates' != "":
+      prod_params["end_dates"] = end_dates
+  if 'start_dates' != "": 
+      prod_params["start_dates"] = start_dates
+  
 
-# update_default_params(params)
+  # Get the SLURM_JOB_ID from the environment
+  
+  slurm_job_id = subprocess.getoutput("echo $SLURM_JOB_ID")
+  account = ""
+  if slurm_job_id:
+      command = f"scontrol show job {slurm_job_id}"
+      try:
+          result = subprocess.check_output(command, shell=True, text=True)
+          account_match = re.search(r'Account=([^\s]+)', result)
+          if account_match:
+              account = account_match.group(1)
+          else:
+              print("Account not found.")
+      
+      except subprocess.CalledProcessError as e:
+          print(f"Error executing command: {e}")
+  else:
+      print("No SLURM job ID found. Are you inside a running SLURM job?")
+
+  comp_params = {
+      "debug"       : debug,
+      "entire_tile" : entire_tile,
+      "nodes"       : nodes,
+      "node_memory" : node_memory,
+      "number_workers" : number_workers,
+      "account" : account
+  }
+  
+  return prod_params, comp_params
+
+  
+def earth_data_authentication():
+    
+  netrc_path = os.path.expanduser('~/.netrc')
+  try:
+    netrc_data = netrc.netrc(netrc_path)
+    # Get the login credentials for the specified machine (e.g., 'urs.earthdata.nasa.gov')
+    machine = 'urs.earthdata.nasa.gov'  # Replace with the machine name you want to extract credentials for
+    login, _, password = netrc_data.authenticators(machine)
+    if login and password:
+      pass
+    else:
+      print("<<<<<<<<<<The .netrc file does not exist. Please run the following command first:")
+      print("<<<<<<<<<< ")
+      print(' echo "machine urs.earthdata.nasa.gov login **your username** password **your password**" > ~/.netrc ')
+      print(">>>>>>>>>> ")
+      sys.exit(1)
+  except Exception as e:
+      print("<<<<<<<<<<The .netrc file does not exist. Please run the following command first:")
+      print("<<<<<<<<<< ")
+      print(' echo "machine urs.earthdata.nasa.gov login **your username** password **your password**" > ~/.netrc ')
+      print(">>>>>>>>>> ")
+      sys.exit(1)

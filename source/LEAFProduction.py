@@ -3,10 +3,9 @@ import time
 import numpy as np
 import pandas as pd
 import xarray as xr
-#import odc.stac
-
-from datetime import datetime
 import concurrent.futures
+from datetime import datetime
+
 
 import eoImage as eoIM
 import eoMosaic as eoMz
@@ -31,7 +30,7 @@ import SL2P_NetsTools
 #                    2024-Jul-20  Lixin Sun  Modified to generate the final composite image tile by tile.
 #
 #############################################################################################################
-def create_LEAF_maps(inParams):
+def create_LEAF_maps(ProdParams, CompParams):
   '''
     Args:
       inParams(dictionary): A dictionary containing all execution parameters.'''
@@ -40,23 +39,42 @@ def create_LEAF_maps(inParams):
   #==========================================================================================================
   # Validate input parameters
   #==========================================================================================================
-  if len(inParams['current_region']) < 6: #Ensure the existence of a valid 'current_region' item
+  if len(ProdParams['current_region']) < 6: #Ensure the existence of a valid 'current_region' item
     print('<create_LEAF_maps> Invalid <current_tile> item in parameter dictionary!')
     return None
   
   #==========================================================================================================
-  # Get a list of unique granule names
+  # Create the required mosaic image
   #==========================================================================================================
-  mosaic = eoMz.period_mosaic(inParams, eoIM.EXTRA_ANGLE)
+  prod_names = ProdParams['prod_names']
+  #print(f'\n<create_LEAF_maps> all parameters for generating mosaic: {ProdParams}')
+
+  ext_tiffs_rec, period_str, mosaic = eoMz.period_mosaic(ProdParams, CompParams, False)
   print('\n<create_LEAF_maps> The bands in mosaic image:', mosaic.data_vars)
+  # print('\n<create_LEAF_maps> ext_tiffs_rec = ', ext_tiffs_rec)
+  # print('\n<create_LEAF_maps> period_str = ', period_str)
+  
+  #return mosaic
+  ProdParams['prod_names'] = prod_names
+  #print(f'\n\n\n\n<create_LEAF_maps> all parameters after generating mosaic: {ProdParams}')
+  #==========================================================================================================
+  # Convert the angle data variables, 'VZA', 'VAA', 'SZA', and 'SAA', to three cos data variables
+  #==========================================================================================================
+  mosaic = mosaic.assign(cosSZA = np.cos(np.deg2rad(mosaic['SZA'])),
+                         cosVZA = np.cos(np.deg2rad(mosaic['VZA'])),
+                         cosRAA = np.cos(np.deg2rad(mosaic['SAA'] - mosaic['VAA'])))
+  
+  # Drop off 'VZA', 'VAA', 'SZA', and 'SAA' data variables
+  mosaic = mosaic.drop_vars(['SZA', 'SAA', 'VZA', 'VAA'])
+  print('\n<create_LEAF_maps> The bands in modified mosaic image:', mosaic.data_vars)
 
   #==========================================================================================================
   # (1) Read and clip land cover map based on the spatial extent of "entire_map"
   # (2) Create a network ID map with the same spatial dimensions as clipped landcover map
   #==========================================================================================================  
   #sub_LC_map = eoAD.get_local_CanLC('F:\\Canada_LC2020\\Canada_LC_2020_30m.tif', entire_map) # for workstation at Observatory
-  sub_LC_map = eoAD.get_local_CanLC('C:\\Work_documents\\Canada_LC_2020_30m.tif', mosaic) # for work laptop
-  SsrData    = eoIM.SSR_META_DICT[str(inParams['sensor']).upper()]
+  sub_LC_map = eoAD.get_local_CanLC('C:\\Work_Data\\Canada_LC_maps\\Canada_LC_2020_30m.tif', mosaic) # for work laptop
+  SsrData    = eoIM.SSR_META_DICT[str(ProdParams['sensor']).upper()]
 
   DS_Options = SL2P_V1.make_DS_options('sl2p_nets', SsrData)  
   netID_map  = SL2P_NetsTools.makeIndexLayer(sub_LC_map, DS_Options)
@@ -65,14 +83,14 @@ def create_LEAF_maps(inParams):
   # Define a function that can produce vegetation parameter maps for ONE granule
   #==========================================================================================================
   ready_mosaic = eoIM.rescale_spec_bands(mosaic, SsrData['LEAF_BANDS'], 0.01, 0)
-  out_VP_maps  = SL2P_NetsTools.estimate_VParams(inParams, DS_Options, ready_mosaic, netID_map)  
+  out_VP_maps  = SL2P_NetsTools.estimate_VParams(ProdParams, DS_Options, ready_mosaic, netID_map)  
     
   #==========================================================================================================
   # Display the elapsed time for entire process
   #==========================================================================================================
   leaf_stop = time.time()
   leaf_time = (leaf_stop - leaf_start)/60
-  print('\n\n<<< The elapsed time for generating one monthly tile product = %6.2f minutes>>>'%(leaf_time))
+  print(f'\n\n<<< The elapsed time for generating one monthly tile product = {leaf_time} minutes>>>')
 
   return out_VP_maps
 
@@ -164,6 +182,7 @@ def export_VegParamMaps(inParams, inXrDS):
       inParams(dictionary): A dictionary containing all required execution parameters;
       inXrDS(xrDS): A xarray dataset object containing mosaic images to be exported.'''
   
+  print('\n\n<export_VegParamMaps> the data variables in given VP map: ', inXrDS.data_vars)
   #==========================================================================================================
   #
   #==========================================================================================================  
@@ -287,16 +306,18 @@ def tile_LEAF_production(Params):
 # Revision history:  2024-Jul-30  Lixin Sun  Initial creation
 #
 #############################################################################################################
-def LEAF_production(inExeParams):
+def LEAF_production(ProdParams, CompParams):
   '''Produces monthly biophysical parameter maps for a number of tiles and months.
 
      Args:
-       inExeParams(Python Dictionary): A Python dictionary containing all input parameters for one execution.'''
+       ProdParams(Python Dictionary): A dictionary containing input parameters related to production;
+       CompParams(Python Dictionary): A dictionary containing input parameters related to used computing environment.
+  '''
 
   #==========================================================================================================
   # Standardize the execution parameters so that they are applicable for producing vegetation parameter maps
   #==========================================================================================================
-  Params = eoPM.get_LEAF_params(inExeParams)
+  Params = eoPM.get_LEAF_params(ProdParams)
   print('<LEAF_production> All input parameters = ', Params) 
 
   #==========================================================================================================
@@ -324,28 +345,9 @@ def LEAF_production(inExeParams):
       else: 
         # Produce and export vegetation parameetr maps for a time period and a region
         print('\n<tile_LEAF_production> Generate and export separate vegetation biophysical maps......')        
-        VBP_maps = create_LEAF_maps(Params)
+        VBP_maps = create_LEAF_maps(Params, CompParams)
       
         # Export results for ONE tile and ONE month/season        
         export_VegParamMaps(Params, VBP_maps)   
 
-    
-
-
-
-# params = {
-#     'sensor': 'S2_SR',           # A sensor type string (e.g., 'S2_SR' or 'L8_SR' or 'MOD_SR')
-#     'unit': 2,                   # A data unit code (1 or 2 for TOA or surface reflectance)    
-#     'year': 2023,                # An integer representing image acquisition year
-#     'nbYears': -1,               # positive int for annual product, or negative int for monthly product
-#     'months': [7,8],               # A list of integers represening one or multiple monthes     
-#     'tile_names': ['tile55_921', 'tile55_922'], # A list of (sub-)tile names (defined using CCRS' tile griding system) 
-#     'prod_names': ['LAI', 'fCOVER', 'fAPAR', 'Albedo'],    #['mosaic', 'LAI', 'fCOVER', ]    
-#     'resolution': 200,            # Exporting spatial resolution    
-#     'out_folder': 'C:/Work_documents/LEAF_tile55_2023_922_Aug_200m_new',  # the folder name for exporting
-#     'projection': 'EPSG:3979',    
-#     #'start_date': '2022-06-15',
-#     #'end_date': '2022-09-15'
-# }
-
-# LEAF_production(params)
+  

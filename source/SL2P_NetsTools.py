@@ -354,7 +354,7 @@ def estimate_VParams(inParams, DS_Options, inImg, netID_map):
       DS_Options(Dictionary): A dictionary containing options for a specific satellite sensor/dataset;
       inImg(xarray.dataset): An xarray.dataset object containing all required inputs for veg parameter estimation;
       netID_map(xarray.dataset): An xarray.dataset object containing network IDs for different pixels. '''
-      
+
   #==========================================================================================================
   # Clip 'netID_map' to match the spatial dimensions of the given image (inImg)
   #==========================================================================================================
@@ -376,7 +376,6 @@ def estimate_VParams(inParams, DS_Options, inImg, netID_map):
   # Reorganize the order of data variables in 'inImg' according to 'input_bands' 
   inImg = inImg[input_bands]
 
-  print('<estimate_VParams> the variables in the given image = ', inImg.data_vars)
   # Stack the data variables of 'inImg' into a single DataArray
   stacked_data = inImg.to_array(dim='band')
 
@@ -394,7 +393,8 @@ def estimate_VParams(inParams, DS_Options, inImg, netID_map):
   #==========================================================================================================  
   for param_name in inParams['prod_names']:
     VP_Options = SL2P_V1.make_VP_options(param_name)  #VP => vegetation parameter
-    if VP_Options != None:
+
+    if VP_Options is not None:
       estimate = one_vege_param_map(estimateSL2P_2DNets, VP_Options, stacked_data, sub_netID_map)
       out_veg_maps[param_name] = estimate.astype(np.float32)
       
@@ -405,7 +405,7 @@ def estimate_VParams(inParams, DS_Options, inImg, netID_map):
       #outDF['error'+v_param] = one_vege_param_map(errorsSL2P_2DNets,   VP_Options, DS_Options, inImg, cliped_netID_map)
 
   out_veg_maps[eoIM.pix_QA] = xr.DataArray(data=QC_img, dims=['y', 'x']).astype(np.uint8)
-
+  
   return out_veg_maps.where(date_img > 0)
 
 

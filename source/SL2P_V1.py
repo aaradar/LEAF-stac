@@ -151,7 +151,7 @@ def get_SL2P_filenames(DSName, NetPath):
 
 
 #############################################################################################################
-# Description: This dictionary returns the band names to be applied as inputs to the SL2P models for a
+# Description: This function returns the band names to be applied as inputs to the SL2P models for a
 #              specified dataset/sensor.
 #
 #############################################################################################################
@@ -201,7 +201,7 @@ def make_DS_options(NetPath, SsrData):
 def make_VP_options(VPName): 
   VPName = VPName.upper()
   if is_valid_VP_name(VPName) == False:
-    print ('<make_param_options> The given parameter name <%s> is invalid!'%(VPName))
+    print (f'<make_VP_options> The given parameter name {VPName} is invalid!')
     return None
     
   PROD_OPTIONS = {}

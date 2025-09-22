@@ -1,12 +1,11 @@
-#import pvlib
+
 import calendar
 import numpy as np
+import eoImage as Img
+import eoTileGrids as eoTG
 from pyproj import Transformer
 from datetime import datetime, timedelta
 
-
-import eoImage as Img
-import eoTileGrids as eoTG
 
 
 
@@ -172,37 +171,6 @@ def time_window_size(StartD, StopD):
 
 
 
-#==================================================================================================
-# define a spatial region around Ottawa
-#==================================================================================================
-ottawa_region = {
-    'type': 'Polygon',
-    'coordinates': [
-       [
-         [-76.120,45.184], 
-         [-75.383,45.171],
-         [-75.390,45.564], 
-         [-76.105,45.568], 
-         [-76.120,45.184]
-       ]
-    ]
-}
-
-
-tile55_922 = {
-    'type': 'Polygon',
-    'coordinates': [
-       [
-         [-77.6221, 47.5314], 
-         [-73.8758, 46.7329],
-         [-75.0742, 44.2113], 
-         [-78.6303, 44.9569],
-         [-77.6221, 47.5314]
-       ]
-    ]
-}
-
-
 
 #############################################################################################################
 # Description: 
@@ -246,8 +214,9 @@ def get_lats_lons(inRegion):
 
 
 #############################################################################################################
-# Description: This function returns a boundary box [min(longs), min(lats), max(longs), max(lats)] of a given 
-#              geographic region.
+# Description: This function returns a boundary box of a given geographic region. If no projection or
+#              "epsg:4326" is provided as 'out_epsg_code', then lat/long boundary box will be returned.
+#              Otherwise, a boundary box in specified projection will be returned. 
 #
 # Revision history:  2024-May-28  Lixin Sun  Initial creation
 # 
@@ -368,23 +337,3 @@ def divide_bbox(inBbox, nDivides):
       sub_regions.append(sub_region)
   
   return sub_regions
-
-
-
-
-
-
-# region = eoTG.get_tile_polygon('tile55_922')
-# bbox = get_region_bbox(region, 'EPSG:3979')
-# print(bbox)
-
-
-#############################################################################################################
-# cases testing code
-#############################################################################################################
-#get_average_VAs('S2A', TimeStamp, CentreLat, CentreLon, CentreAlt)
-
-#result = time_window_size('2023-09-30', '2024-10-10')
-
-#print('\nresult = ', result)
-#print('testing ended!')
