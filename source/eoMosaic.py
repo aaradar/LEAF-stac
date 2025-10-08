@@ -198,7 +198,7 @@ def search_STAC_Catalog(MosaicParams, MaxImgs):
   #==========================================================================================================
   # Search and filter a image collection
   #==========================================================================================================
-  Region = MosaicParams['Region']
+  Region = Criteria['region']
   print('<search_STAC_Images> The given region = ', Region)
 
   nCollections = len(Criteria['collection'])
@@ -206,7 +206,7 @@ def search_STAC_Catalog(MosaicParams, MaxImgs):
     stac_items = []
     for coll in Criteria['collection']:
       stac_catalog = catalog.search(collections = [coll], 
-                                    intersects  = Region,                           
+                                    intersects  = Region,
                                     datetime    = str(Criteria['timeframe']),
                                     query       = Criteria['filters'],
                                     limit       = MaxImgs)
@@ -415,7 +415,7 @@ def get_base_Image(StacItems, MosaicParams):
   #==========================================================================================================
   # Extract required parameters
   #==========================================================================================================
-  Region     = MosaicParams['Region']
+  Region     = MosaicParams['Criteria']['region'] 
   ProjStr    = MosaicParams['projection']
   Scale      = MosaicParams['resolution']
   Bands      = MosaicParams['Criteria']['bands'] 
@@ -979,13 +979,13 @@ def get_granule_mosaic(Input_tuple):
   # Extract parameters from "MosaicParams"
   #==========================================================================================================  
   SsrData    = MosaicParams['SsrData']
-  StartStr   = MosaicParams['StartStr']
-  EndStr     = MosaicParams['EndStr']
   ProjStr    = MosaicParams['projection']
   Scale      = MosaicParams['resolution']
   Bands      = MosaicParams['Criteria']['bands']  
   InclAngles = MosaicParams['IncludeAngles']
-
+  
+  StartStr, EndStr = eoPM.get_time_window(MosaicParams)
+  
   chunk_size = {'x': 2000, 'y': 2000}
   #==========================================================================================================
   # Load satellite images from a STAC catalog

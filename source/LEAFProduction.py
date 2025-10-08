@@ -300,39 +300,36 @@ def tile_LEAF_production(Params):
 
 
 #############################################################################################################
-# Description: This is the main fuction that can produce vegetation parameter maps according to a given
-#              execution parameter dictionary.
+# Description: This fuction produces vegetation biophysical parameter maps according to given parameters.
 # 
 # Revision history:  2024-Jul-30  Lixin Sun  Initial creation
 #
 #############################################################################################################
 def LEAF_production(ProdParams, CompParams):
-  '''Produces monthly biophysical parameter maps for a number of tiles and months.
+  '''Produces vegetation biophysical parameter maps according to given parameters.
 
      Args:
-       ProdParams(Python Dictionary): A dictionary containing input parameters related to production;
-       CompParams(Python Dictionary): A dictionary containing input parameters related to used computing environment.
+       ProdParams(Python Dictionary): A dictionary containing input parameters related to data production;
+       CompParams(Python Dictionary): A dictionary containing input parameters related to the computing environment.
   '''
 
   #==========================================================================================================
-  # Standardize the execution parameters so that they are applicable for producing vegetation parameter maps
+  # Standardize the input parameters
   #==========================================================================================================
-  usedParams = eoPM.get_LEAF_params(ProdParams)
+  usedParams = eoPM.get_LEAF_params(ProdParams, CompParams)
   print('<LEAF_production> All input parameters = ', usedParams) 
 
   #==========================================================================================================
-  # Produce vegetation parameter porducts for eath region and each time window
+  # Produce vegetation biophysical parameter maps for each region and time window
   #==========================================================================================================
-  region_names = usedParams['regions'].keys()    # A list of region names
-  nTimes       = len(usedParams['start_dates'])  # The number of time windows
+  region_names = usedParams['regions'].keys()    # Get a list of region names
+  nTimes       = len(usedParams['start_dates'])  # Get the number of time windows
 
-  for reg_name in region_names:
-    # Loop through each spatial region
-    usedParams = eoPM.set_spatial_region(usedParams, reg_name)
+  for reg_name in region_names:                                 # Loop through each spatial region
+    usedParams = eoPM.set_spatial_region(usedParams, reg_name)  # Specify a current spatial region
     
-    for TIndex in range(nTimes):
-      # Produce vegetation parameter porducts for each time window
-      usedParams = eoPM.set_current_time(usedParams, TIndex)
+    for TIndex in range(nTimes):                              # Loop through each time window
+      usedParams = eoPM.set_current_time(usedParams, TIndex)  # Specify a current spatial region
 
       # Produce and export products in a specified way (a compact image or separate images)      
       out_style = str(usedParams['export_style']).lower()
@@ -344,11 +341,11 @@ def LEAF_production(ProdParams, CompParams):
         #export_compact_params(fun_Param_dict, region, out_params, task_list)
 
       else: 
-        # Produce and export vegetation parameetr maps for a time period and a region
+        # Produce and export vegetation biophysical parameetr maps for a time period and a spatial region
         print('\n<tile_LEAF_production> Generate and export separate vegetation biophysical maps......')        
         VBP_maps = create_LEAF_maps(usedParams, CompParams)
       
-        # Export results for ONE tile and ONE time window
+        # Export results for ONE region and ONE time window
         export_VegParamMaps(usedParams, VBP_maps)   
 
   

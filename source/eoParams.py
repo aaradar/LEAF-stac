@@ -45,8 +45,8 @@ from datetime import datetime
 
 all_param_keys = ['sensor', 'ID', 'unit', 'bands', 'year', 'nbYears', 'months', 'tile_names', 'prod_names', 
                   'out_location', 'resolution', 'GCS_bucket', 'out_folder', 'export_style', 'projection', 'CloudScore',
-                  'monthly', 'start_dates', 'end_dates', 'regions', 'scene_ID', 'current_time', 'current_region', 'time_str','cloud_cover',
-                  'StartStr', 'EndStr', 'Region', 'SsrData', 'Criteria', 'IncludeAngles', 'debug', 'entire_tile',
+                  'monthly', 'start_dates', 'end_dates', 'regions', 'scene_ID', 'current_time', 'current_region', 
+                  'time_str','cloud_cover', 'SsrData', 'Criteria', 'IncludeAngles', 'debug', 'entire_tile',
                   'nodes', 'node_memory', 'number_workers', 'account', 'standardized']
 
 
@@ -90,7 +90,7 @@ def which_product(ProdParams):
 # Revision history:  2024-May-24  Lixin Sun  Initial creation
 # 
 #############################################################################################################
-def get_query_conditions(inParams, StartStr, EndStr, CloudThresh):  
+def get_query_conditions(inParams, StartStr, EndStr, Region):  
   #==================================================================================================
   # Create a filter for the search based on metadata. The filtering params will depend upon the 
   # image collection we are using. e.g. in case of Sentine-2 L2A, we can use params such as: 
@@ -107,21 +107,26 @@ def get_query_conditions(inParams, StartStr, EndStr, CloudThresh):
   # https://planetarycomputer-staging.microsoft.com/api/stac/v1 (this info comes from 
   # https://www.matecdev.com/posts/landsat-sentinel-aws-s3-python.html)
   #==================================================================================================
-  SsrData    = inParams['SsrData']
-  ssr_code   = SsrData['SSR_CODE']
-  resolution = inParams['resolution']
-
-  query_conds = {}  
+  SsrData     = inParams['SsrData']
+  ssr_code    = SsrData['SSR_CODE']
+  resolution  = inParams['resolution']
+  CloudThresh = inParams['cloud_cover']
+  
   HLS_angle_bands = ['SZA', 'SAA', 'VZA', 'VAA']
 
+  query_conds = {}  
+  query_conds['timeframe'] = str(StartStr) + '/' + str(EndStr)
+  query_conds['filters']   = {"eo:cloud_cover": {"lt": CloudThresh} }
+  query_conds['region']    = Region
+
   if ssr_code > eoIM.MAX_LS_CODE and ssr_code < eoIM.MOD_sensor:
+    # For Sentinel-2 data from AWS data catalog
     query_conds['catalog']    = "https://earth-search.aws.element84.com/v1"
     query_conds['collection'] = ["sentinel-2-l2a"]
-    query_conds['timeframe']  = str(StartStr) + '/' + str(EndStr)
-    query_conds['filters']    = {"eo:cloud_cover": {"lt": CloudThresh} }
     
     if 'bands' not in inParams:
       query_conds['bands'] = SsrData['ALL_BANDS'] + ['scl'] if resolution > 15 else SsrData['SIX_BANDS'] + ['scl'] 
+
     else : 
       required_bands = SsrData['ALL_BANDS'] + ['scl'] if resolution > 15 else SsrData['SIX_BANDS'] + ['scl'] 
       for band in inParams['bands']:
@@ -132,13 +137,13 @@ def get_query_conditions(inParams, StartStr, EndStr, CloudThresh):
       query_conds['bands']  = required_bands
 
   elif ssr_code < eoIM.MAX_LS_CODE and ssr_code > 0:
+    # For Landsat data from AWS data catalog (This is not working right now!!!!) 
     query_conds['catalog']    = "https://earth-search.aws.element84.com/v1"
     query_conds['collection'] = ["landsat-c2-l2"]
-    query_conds['timeframe']  = str(StartStr) + '/' + str(EndStr)
     query_conds['bands']      = ['blue', 'green', 'red', 'nir08', 'swir16', 'swir22', 'qa_pixel']
-    query_conds['filters']    = {"eo:cloud_cover": {"lt": CloudThresh}}  
   
   elif ssr_code > eoIM.MOD_sensor and resolution > 25:
+    # For HLS data from NASA data centre
     if ssr_code == eoIM.HLSS30_sensor:
       query_conds['collection'] = ["HLSS30_2.0"]
       query_conds['bands']      = {'S2': ['B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'B08', 'B11', 'B12', 'Fmask'],
@@ -157,8 +162,6 @@ def get_query_conditions(inParams, StartStr, EndStr, CloudThresh):
                                    'angle': HLS_angle_bands}
       
     query_conds['catalog']   = "https://cmr.earthdata.nasa.gov/stac/LPCLOUD"
-    query_conds['timeframe'] = str(StartStr) + '/' + str(EndStr)    
-    query_conds['filters']   = {"eo:cloud_cover": {"lt": CloudThresh}}  
 
   else:
     print('<get_query_conditions> Wrong sensor code or spatial resolution was specified!')
@@ -216,7 +219,8 @@ def has_custom_window(inParams):
 # Note: If a customized time windows has been specified, then the given 'current_month' will be ignosed
 #
 # Revision history:  2024-Apr-08  Lixin Sun  Initial creation
-#
+#                    2025-Oct-06  Lixin Sun  Update query conditions accordingly the change in current time
+#  
 #############################################################################################################
 def set_current_time(inParams, current_time):
   '''Sets values for 'curent_time' and 'time_str' keys based on 'current_time' input
@@ -247,6 +251,16 @@ def set_current_time(inParams, current_time):
     inParams['time_str'] = eoIM.get_MonthName(int(inParams['months'][current_time]))
   else:  
     inParams['time_str'] = str(inParams['start_dates'][current_time]) + '_' + str(inParams['end_dates'][current_time])
+
+  #==========================================================================================================
+  # Update STAC query timeframe accordingly 
+  #==========================================================================================================
+  startT, stopT = get_time_window(inParams)
+
+  if 'Criteria' in inParams:
+    inParams['Criteria']['timeframe'] = str(startT) + '/' + str(stopT)
+  else:
+    print('<set_current_time> Criteria key does not exist in Parameter dictionary!!')
 
   return inParams
 
@@ -284,6 +298,16 @@ def set_spatial_region(inParams, region_name):
   # Change value for 'current_region' key 
   inParams['current_region'] = region_name
   
+  #==========================================================================================================
+  # Update STAC query region accordingly 
+  #==========================================================================================================
+  Region = inParams['regions'][region_name]
+
+  if 'Criteria' in inParams:
+    inParams['Criteria']['region'] = Region
+  else:
+    print('<set_current_time> Criteria key does not exist in Parameter dictionary!!')
+
   # Return the modified parameter dictionary
   return inParams
 
@@ -382,6 +406,8 @@ def valid_user_params(UserParams):
       all_valid = False
       print('<valid_user_params> Invalid sensor or unit was specified!')
   
+  outParams['SsrData'] = eoIM.SSR_META_DICT[str(outParams['sensor']).upper()]
+
   # Fill or valid 'year' parameter
   if 'year' not in outParams:
     outParams['year'] = datetime.now().year
@@ -548,9 +574,11 @@ def form_time_windows(inParams):
         inParams['end_dates'].append(end) 
 
   elif 'standardized' not in inParams:
-      inParams['monthly'] = False
+    inParams['monthly'] = False
+  
+  inParams['current_time'] = 0
 
-  return set_current_time(inParams, 0)
+  return inParams
   
 
 
@@ -568,22 +596,23 @@ def form_time_windows(inParams):
 #
 #############################################################################################################
 def form_spatial_regions(inParams):
-  if not has_custom_region(inParams):   #There is no customized region
+  if not has_custom_region(inParams):   # There is no customized region, so use regular tile regions
     inParams['regions'] = {}
     for tile_name in inParams['tile_names']:      
       if eoTG.valid_tile_name(tile_name):
         inParams['regions'][tile_name] = eoTG.get_tile_polygon(tile_name)
     
-    return set_spatial_region(inParams, inParams['tile_names'][0])  
-  else:   # There is at least one customized region
-    region_names = inParams['regions'].keys()
-    inParams['current_region'] = list(region_names)[0]
+    #return set_spatial_region(inParams, inParams['tile_names'][0])  
+  
+  #==========================================================================================================
+  # Set current region
+  #==========================================================================================================
+  if 'regions' in inParams:
+    inParams['current_region'] = list(inParams['regions'].keys())[0]
+  else:
+    print('<form_spatial_regions> There is no customized regions in parameter dictionary!!')  
 
-    # if inParams['tile_names'] is None and inParams['ID']  is None:
-    #   inParams['current_region'] = f"custom_TL{int(inParams['regions']['coordinates'][0][0][0])}_BR{int(inParams['regions']['coordinates'][0][3][0])}"
-    # elif inParams['tile_names'] is None and inParams['ID'] is not None: 
-    #   inParams['current_region'] = inParams['ID']
-    return inParams
+  return inParams
 
 
 
@@ -609,7 +638,7 @@ def standardize_params(inParams):
     return None
   
   #==========================================================================================================
-  # Confirm if the given parameter dictionary has already been standardized
+  # Ensure the given parameter dictionary is not standardized twice
   #==========================================================================================================
   if 'standardized' in inParams:
     if inParams['standardized'] == True:
@@ -617,7 +646,7 @@ def standardize_params(inParams):
       return inParams
     
   #==========================================================================================================
-  # Validate user specified parameters 
+  # Validate the given parameters 
   #==========================================================================================================
   all_valid, out_Params = valid_user_params(inParams)
 
@@ -635,9 +664,18 @@ def standardize_params(inParams):
   # If only regular tile names are specified, then create a dictionary with tile names and their 
   # corresponding 'ee.Geometry.Polygon' objects as keys and values, respectively.   
   #==========================================================================================================
-  out_Params = form_spatial_regions(out_Params)  
-   
-  # Lock the returned parameter dictionary to prevent it being standardized twice
+  out_Params = form_spatial_regions(out_Params) 
+
+  #==========================================================================================================
+  # Get ONE time window and ONE spatial region, respectively, and then generate a condition dictionary for
+  # querying a STAC data catalog. 
+  #==========================================================================================================
+  StartStr, EndStr = get_time_window(out_Params)  
+  Region           = get_spatial_region(out_Params)
+  
+  out_Params['Criteria'] = get_query_conditions(out_Params, StartStr, EndStr, Region)
+
+  # Lock the returned parameter dictionary to prevent it from being standardized twice.
   out_Params['standardized'] = True
 
   return out_Params
@@ -649,13 +687,18 @@ def standardize_params(inParams):
 ############################################################################################################# 
 # Description: Obtain a parameter dictionary for LEAF tool
 #############################################################################################################
-def get_LEAF_params(inParams):
-  out_Params = standardize_params(inParams)  # Modify default parameters with given ones  
+def get_LEAF_params(ProdParams, CompParams):
+  out_Params = standardize_params(ProdParams)   # Standardize input parameters
+
   out_Params['unit'] = 2                        # Always surface reflectance for LEAF production
   out_Params['IncludeAngles'] = True            # Imaging geometry angles must be always included   
-  out_Params['standardized']  = True            # Mark the dictionary has been standardized, except for
-                                                # changing 'current_time' and 'current_region', no other
-                                                # parameter can be changed   
+
+  #==========================================================================================================
+  # Merge CompParams into "out_Params"
+  #==========================================================================================================
+  for key, value in CompParams.items():
+    out_Params.update({key: value})
+
   return out_Params  
 
 
@@ -682,44 +725,40 @@ def get_mosaic_params(ProdParams, CompParams):
   if outParams is None:
     return None
   
-  outParams['prod_names']   = ['mosaic']      # Of course, product name should be always 'mosaic'  
+  outParams['prod_names'] = ['mosaic']      # Of course, product name should be always 'mosaic'  
 
   #==========================================================================================================
   # Get ONE valid time window and ONE valid spatial region, respectively
   #==========================================================================================================
-  StartStr, EndStr = get_time_window(ProdParams)
-  if StartStr is None or EndStr is None:
-    print('\n<get_mosaic_params> Invalid time window was defined!!!')
-    return None
-  else:
-    outParams['StartStr'] = StartStr
-    outParams['EndStr']   = EndStr
-
-  Region = get_spatial_region(ProdParams)
-  # if ProdParams['tile_names'] is not None:
-  #   Region = get_spatial_region(ProdParams)
+  # StartStr, EndStr = get_time_window(ProdParams)
+  # if StartStr is None or EndStr is None:
+  #   print('\n<get_mosaic_params> Invalid time window was defined!!!')
+  #   return None
   # else:
-  #   Region = ProdParams['regions']
+  #   outParams['StartStr'] = StartStr
+  #   outParams['EndStr']   = EndStr
+
+  # Region = get_spatial_region(ProdParams)
   
-  if Region is None:
-    print('\n<get_mosaic_params> Invalid spatial region was defined!!!')
-    return None
-  else: 
-    outParams['Region'] = Region
+  # if Region is None:
+  #   print('\n<get_mosaic_params> Invalid spatial region was defined!!!')
+  #   return None
+  # else: 
+  #   outParams['Region'] = Region
 
   #==========================================================================================================
   # Prepare other required parameters and query criteria
   #==========================================================================================================
-  outParams['projection']  = str(ProdParams['projection']) if 'projection' in ProdParams else 'EPSG:3979'
-  outParams['resolution']  = int(ProdParams['resolution']) if 'resolution' in ProdParams else 20
-  outParams['SsrData']     = eoIM.SSR_META_DICT[str(ProdParams['sensor']).upper()]
+  # outParams['projection']  = str(ProdParams['projection']) if 'projection' in ProdParams else 'EPSG:3979'
+  # outParams['resolution']  = int(ProdParams['resolution']) if 'resolution' in ProdParams else 20
+  # outParams['SsrData']     = eoIM.SSR_META_DICT[str(ProdParams['sensor']).upper()]
 
-  ssr_code = outParams['SsrData']['SSR_CODE']
-  if outParams['resolution'] < 15 and (ssr_code < eoIM.MAX_LS_CODE or ssr_code > eoIM.S2B_sensor):
-    print('<get_mosaic_params> Specified spatial resolution does not match sensor type!') 
-    return None
+  # ssr_code = outParams['SsrData']['SSR_CODE']
+  # if outParams['resolution'] < 15 and (ssr_code < eoIM.MAX_LS_CODE or ssr_code > eoIM.S2B_sensor):
+  #   print('<get_mosaic_params> Specified spatial resolution does not match sensor type!') 
+  #   return None
 
-  outParams['Criteria'] = get_query_conditions(outParams, StartStr, EndStr, outParams['cloud_cover'])
+  #outParams['Criteria'] = get_query_conditions(outParams, StartStr, EndStr, Region)
 
   #==========================================================================================================
   # Merge CompParams into "outParams"

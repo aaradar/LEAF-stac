@@ -363,7 +363,8 @@ def apply_gain_offset(xrDS, SsrData, MaxRef, all_bands):
 
 
 ###################################################################################################
-# Description: This function applys gain and offset to the optical bands of a given image.
+# Description: This function applys default cloud and cloud-shadow masks to a given XArray dataset 
+#              object.
 #
 # Revision history:  2024-May-28  Lixin Sun  Initial creation
 #
@@ -386,17 +387,21 @@ def apply_default_mask(xrDS, SsrData):
  
      Args:        
        xrDS(xrDataset): A given xarray dataset object to which default mask will be applied  
-       SsrData(Dictionary): A Dictionary containing metadata associated with a sensor and data unit.'''
+       SsrData(Dictionary): A Dictionary containing metadata associated with a sensor and data unit.
+  '''
+
   ssr_code = SsrData['SSR_CODE']
   
   if ssr_code > MAX_LS_CODE and ssr_code < 25:  # For Sentinel-2 from AWS data catalog
     scl = xrDS['scl']
     # The pixels with SCL = 0 must be masked out
-    return xrDS.where(((scl > 3) & (scl < 8)) | (scl == 11))
+    #return xrDS.where(((scl > 3) & (scl < 8)) | (scl == 11))   # Original statement used before Oct.07, 2025
+    return xrDS.where(((scl > 1) & (scl < 8)) | (scl > 9))      # New statement used after Oct.07, 2025 as this provide better results
  
   elif ssr_code in [HLSS30_sensor, HLSL30_sensor, HLS_sensor]:
     mask = xrDS['Fmask'].astype(np.uint8) & 0b00001110     #Seems there is no need to mask out aerosols
     return xrDS.where(mask == 0)
+  
   else:    
     return xrDS
   
