@@ -183,16 +183,17 @@ def display_meta_assets(stac_items, First):
 #                                            identical timestamps.
 #
 #############################################################################################################
-def search_STAC_Catalog(MosaicParams, MaxImgs):
+def search_STAC_Catalog(inParams, MaxImgs):
   '''
     Args:
-      MosaicParams(dictionary): A dictionary containing all parameters for generating a composite image;
-      MaxImgs(int): A specified maximum number of images in a queried list;'''
+      inParams(dictionary): A dictionary containing all parameters for generating a composite image;
+      MaxImgs(int): A specified maximum number of images in a queried list.
+  '''
   
   #==========================================================================================================
-  # use publically available stac 
+  # Use publicly available STAC 
   #==========================================================================================================
-  Criteria = MosaicParams['Criteria']
+  Criteria = inParams['Criteria']
   catalog  = psc.Client.open(str(Criteria['catalog']))
 
   #==========================================================================================================
@@ -215,7 +216,7 @@ def search_STAC_Catalog(MosaicParams, MaxImgs):
       try:
         stac_items += items
       except: 
-         raise ValueError("There is no list of STAC items found for your query. If you are using a custom region or time, please adjust and expand them accordingly.")
+        raise ValueError("There is no list of STAC items found for your query. If you are using a custom region or time, please adjust and expand them accordingly.")
   else:
     stac_catalog = catalog.search(collections = Criteria['collection'], 
                                   intersects  = Region,                           
@@ -228,7 +229,7 @@ def search_STAC_Catalog(MosaicParams, MaxImgs):
   #==========================================================================================================
   # Ingest imaging geometry angles into each STAC item
   #==========================================================================================================
-  ssr_str = str(MosaicParams['sensor']).lower()
+  ssr_str = str(inParams['sensor']).lower()
   if 'hls' not in ssr_str:   # For AWS data catalog, where imaging angles are not directly available
     stac_items, angle_time = ingest_Geo_Angles(stac_items)
     print('\n<search_STAC_Catalog> The total elapsed time for ingesting angles = %6.2f minutes'%(angle_time))
@@ -826,7 +827,10 @@ def load_STAC_items(STAC_items, Bands, chunk_size, ProjStr, Scale):
   for item in STAC_items:
     properties = item.properties
     #print("<load_STAC_items> item time tag: datetime: {}; CC: {}".format(properties['datetime'], properties['eo:cloud_cover']))
-    item_CC[properties['datetime']] = properties['eo:cloud_cover']
+    time_str = properties['datetime']
+    dt = datetime.strptime(time_str, "%Y-%m-%dT%H:%M:%S.%fZ")
+    iso_str = dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    item_CC[iso_str] = properties['eo:cloud_cover']
   
   xrDS.attrs["item_CC"] = item_CC
 
@@ -878,6 +882,12 @@ def preprocess_xrDS(xrDS_S2, xrDS_LS, MosaicParams):
     #Concatenate S2 and LS data into the same XAarray object
     xrDS = xr.concat([xrDS_LS, xrDS_S2], dim="time").sortby("time")
 
+    # Merge two 'item_CC' dictionaries (cloud cover for each item) into one dictionary
+    S2_item_CC = xrDS_S2.attrs["item_CC"]
+    LS_item_CC = xrDS_LS.attrs["item_CC"]
+    
+    xrDS.attrs["item_CC"] = S2_item_CC | LS_item_CC
+   
   elif xrDS_S2 is not None:
     # When only HLS_S30 data is available
     xrDS = xrDS_S2

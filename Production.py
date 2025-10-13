@@ -67,21 +67,21 @@ CompParams = {
   "debug"       : True,
   "entire_tile" : False,     #
   "nodes"       : 1,
-  "node_memory" : "120G",
-  "number_workers" : 10
+  "node_memory" : "12G",
+  "number_workers" : 4
 }
 
   
 ProdParams = {
-    'sensor': 'HLSS30_SR',       # A sensor type string (e.g., 'S2_SR' or 'HLSS30_SR' or 'MOD_SR')
+    'sensor': 'HLS_SR',       # A sensor type string (e.g., 'S2_SR' or 'HLSS30_SR' or 'MOD_SR')
     'unit': 2,                   # A data unit code (1 or 2 for TOA or surface reflectance)    
     'year': 2024,                # An integer representing image acquisition year
     'nbYears': -1,               # positive int for annual product, or negative int for monthly product
     'months': [8],            # A list of integers represening one or multiple monthes     
     'tile_names': ['tile55_922'], # A list of (sub-)tile names (defined using CCRS' tile griding system) 
     'prod_names': ['mosaic'],    #['LAI', 'fCOVER', 'fAPAR', 'Albedo'], 
-    'resolution': 30,            # Exporting spatial resolution    
-    'out_folder': 'C:/Work_Data/HLSS30_mosaic_ott_vanc_2024_10m_new_mask',  # the folder name for exporting
+    'resolution': 100,            # Exporting spatial resolution    
+    'out_folder': 'C:/Work_Data/HLS_mosaic_ott_vanc_2024_100m_new_mask',  # the folder name for exporting
     'projection': 'EPSG:3979',
     'IncludeAngles': False,
     #'start_dates': ['2024-06-15'],
