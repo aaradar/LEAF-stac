@@ -72,21 +72,22 @@ CompParams = {
 }
 
   
+  
 ProdParams = {
-    'sensor': 'HLS_SR',       # A sensor type string (e.g., 'S2_SR' or 'HLSS30_SR' or 'MOD_SR')
+    'sensor': 'S2_SR',       # A sensor type string (e.g., 'S2_SR', 'HLS_SR', 'HLSL30_SR', 'HLSS30_SR' or 'MOD_SR')
     'unit': 2,                   # A data unit code (1 or 2 for TOA or surface reflectance)    
     'year': 2024,                # An integer representing image acquisition year
     'nbYears': -1,               # positive int for annual product, or negative int for monthly product
     'months': [8],            # A list of integers represening one or multiple monthes     
-    'tile_names': ['tile55_922'], # A list of (sub-)tile names (defined using CCRS' tile griding system) 
-    'prod_names': ['mosaic'],    #['LAI', 'fCOVER', 'fAPAR', 'Albedo'], 
+    'tile_names': ['tile42_921'], # A list of (sub-)tile names (defined using CCRS' tile griding system) 
+    'prod_names': ['LAI', 'fCOVER', 'fAPAR', 'Albedo'],    #['LAI', 'fCOVER', 'fAPAR', 'Albedo'], 
     'resolution': 100,            # Exporting spatial resolution    
-    'out_folder': 'C:/Work_Data/HLS_mosaic_ott_vanc_2024_100m_new_mask',  # the folder name for exporting
+    'out_folder': 'C:/Work_Data/LEAF_tile42_921_2024_100m',  # the folder name for exporting
     'projection': 'EPSG:3979',
     'IncludeAngles': False,
     #'start_dates': ['2024-06-15'],
     #'end_dates': ['2024-09-15'],
-    'regions': {'ottawa': ottawa_region, 'vancouver': vancouver_region}
+    #'regions': {'ottawa': ottawa_region}  #, 'vancouver': vancouver_region}    
 }
 
 

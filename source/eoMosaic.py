@@ -22,8 +22,11 @@ import numpy as np
 import xarray as xr
 import pandas as pd
 import dask.array as da
+
+from dateutil import parser
 from dask import delayed
 from pathlib import Path
+
 import concurrent.futures
 import pandas as pd
 import dask.array as da
@@ -828,8 +831,9 @@ def load_STAC_items(STAC_items, Bands, chunk_size, ProjStr, Scale):
     properties = item.properties
     #print("<load_STAC_items> item time tag: datetime: {}; CC: {}".format(properties['datetime'], properties['eo:cloud_cover']))
     time_str = properties['datetime']
-    dt = datetime.strptime(time_str, "%Y-%m-%dT%H:%M:%S.%fZ")
-    iso_str = dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    #dt = datetime.strptime(time_str, "%Y-%m-%dT%H:%M:%S.%fZ")
+    dt_obj  = parser.isoparse(time_str)
+    iso_str = dt_obj.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     item_CC[iso_str] = properties['eo:cloud_cover']
   
   xrDS.attrs["item_CC"] = item_CC
