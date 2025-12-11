@@ -66,7 +66,9 @@ EXTRA_ANGLE = 1
 EXTRA_NDVI  = 2
 EXTRA_CODE  = 3     # sensor code
 
-
+DATA_TYPE   = ['S2_SR', 'LS8_SR', 'LS9_SR', 'LS7_SR', 'LS5_SR', 'S2_TOA', 'LS8_TOA', 'LS9_TOA', 'LS7_TOA', 'LS5_TOA']
+STD_6_BANDS = ['blue', 'green', 'red', 'nir08', 'swir16', 'swir22']
+MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 SSR_META_DICT = {
   'S2_SR': { 'NAME': 'S2_SR',
@@ -75,7 +77,7 @@ SSR_META_DICT = {
              'GAIN': 0.0001,
              'OFFSET': 0,                          
              'ALL_BANDS': ['blue', 'green', 'red', 'rededge1', 'rededge2', 'rededge3', 'nir08', 'swir16', 'swir22'],             
-             '10M_BANDS': ['blue', 'green', 'red', 'nir08'],
+             '10M_BANDS': ['blue', 'green', 'red', 'nir08', 'swir16', 'swir22'],
              'SIX_BANDS': ['blue', 'green', 'red', 'nir08', 'swir16', 'swir22'],
              'NoA_BANDS': ['red', 'rededge1', 'rededge2', 'rededge3', 'nir08', 'swir16', 'swir22'],
              'LEAF_BANDS':['green', 'red', 'rededge1', 'rededge2', 'rededge3', 'nir08', 'swir16', 'swir22'],
@@ -170,9 +172,7 @@ SSR_META_DICT = {
 }
 
 
-DATA_TYPE   = ['S2_SR', 'LS8_SR', 'LS9_SR', 'LS7_SR', 'LS5_SR', 'S2_TOA', 'LS8_TOA', 'LS9_TOA', 'LS7_TOA', 'LS5_TOA']
-STD_6_BANDS = ['blue', 'green', 'red', 'nir', 'swir1', 'swir2']
-MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
 
 
 

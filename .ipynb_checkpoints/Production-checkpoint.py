@@ -67,9 +67,8 @@ CompParams = {
   "debug"       : True,
   "entire_tile" : False,     #
   "nodes"       : 1,
-  "node_memory" : "300G",
-  "number_workers" : 10,
-  "chunk_size" : {'x': 4000, 'y': 4000}
+  "node_memory" : "120G",
+  "number_workers" : 40
 }
 
   

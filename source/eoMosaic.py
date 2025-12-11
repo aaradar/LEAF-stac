@@ -409,7 +409,7 @@ def ingest_Geo_Angles(StacItems):
 #                    2024-Dec-02  Marjan Asgari  Modified so that we have a base image backed by a dask array.
 #                    2024-Dec-02  Marjan Asgari  Modified so that we have a base image backed by a dask array.
 #############################################################################################################
-def get_base_Image(StacItems, MosaicParams):
+def get_base_Image(StacItems, MosaicParams, ChunkDict):
   '''
     Args: 
       StacItems(List): A list of STAC items searched for a study area and a time window;
@@ -447,10 +447,10 @@ def get_base_Image(StacItems, MosaicParams):
       # Attempt to load the STAC item and process it
       with odc.stac.load([StacItems[i]],
                         bands  = get_load_bands(StacItems[i], Bands, InclAngles),
-                        chunks = {'x': 2000, 'y': 2000},
+                        chunks = ChunkDict,
                         crs    = ProjStr, 
                         resolution = Scale, 
-                        resampling = "bilinear",
+                        resampling = "nearest",
                         x = (xy_bbox[0], xy_bbox[2]),
                         y = (xy_bbox[3], xy_bbox[1])) as ds_xr:
           
@@ -462,6 +462,7 @@ def get_base_Image(StacItems, MosaicParams):
           i += 1
           if i >= nb_tries:
             break  # Exit the loop after reaching max retries
+
     except Exception as e:
       i += 1
       if i >= nb_tries:
@@ -473,13 +474,14 @@ def get_base_Image(StacItems, MosaicParams):
   ssr_str = str(MosaicParams['sensor']).lower()
   if ssr_str == "HLS_SR": 
     base_xrDS['sensor'] = xr.DataArray(
-            data = dask.array.zeros((base_xrDS.sizes['y'], base_xrDS.sizes['x']), chunks=(2000, 2000), dtype = np.float32),
+            data = dask.array.zeros((base_xrDS.sizes['y'], base_xrDS.sizes['x']), chunks=(ChunkDict['x'], ChunkDict['y']), dtype = np.float32),
             dims=['y', 'x'],
             coords={
                 'y': base_xrDS['y'],
                 'x': base_xrDS['x'],
             }
     )
+
   #==========================================================================================================
   # Rename spectral bands as necessary
   #==========================================================================================================
@@ -714,7 +716,7 @@ def get_load_bands(StacItem, Bands, IncludeAngles):
     load_bands = Bands['LS'] + Bands['angle'] if IncludeAngles == True else Bands['LS']
 
   else:
-    print('<get_load_bands> A wrong STAC item was provided!')
+    print('f<get_load_bands> A wrong STAC item {scene_id} was provided!')
   
   return load_bands
 
@@ -773,6 +775,54 @@ def rename_spec_bands(xrDS):
 
 
 
+#############################################################################################################
+# Description: This function loads a list of STAC items at a specified resolution.
+#
+# Revision history:  2025-Dec-03  Lixin Sun  Initial creation
+#
+#############################################################################################################
+def load_STAC_with_retry(STAC_items, bands, resolution, chunk_size, crs, max_attempts=15, sleep_sec=10):
+  """
+    Inputs:
+      STAC_items: List of STAC items to be loaded;
+      bands: List of band names to be loaded;
+      resolution: Desired spatial resolution (e.g., 10, 20 or 30 meters);
+      chunk_size: Dictionary defining the chunk sizes in X and Y dimensions;
+      crs: String specifying projection;
+      max_attempts: Maximum number of retry attempts for loading;
+      sleep_sec: Number of seconds to wait between retry attempts.
+
+    Returns:
+        xarray.Dataset or None if failed.
+  """
+  attempt = 0
+  while attempt < max_attempts:
+    try:
+      xrDS = odc.stac.load(
+                STAC_items,
+                bands=bands,
+                chunks=chunk_size,
+                crs=crs,
+                fail_on_error=False,
+                resolution=resolution,
+                resampling="nearest",
+                preserve_original_order=True)
+      
+      return xrDS  # success, return immediately
+    
+    except (TimeoutError, ConnectionError) as e:
+      attempt += 1
+      print(f"<load_stac_with_retry> Proxy/connection error: {e}. Retrying {attempt}/{max_attempts}...")
+      if attempt < max_attempts:
+        time.sleep(sleep_sec)
+
+    except Exception as e:
+      print(f"<load_stac_with_retry> An error occurred: {e}")
+      return None
+        
+  return None  # all attempts failed
+
+
 
 
 #############################################################################################################
@@ -791,38 +841,18 @@ def load_STAC_items(STAC_items, Bands, chunk_size, ProjStr, Scale):
       ProjStr(String): A string specifying projection;
       Scale(Float): A float number defining spatial resolution of the loaded images.
   """
-  nItems = len(STAC_items)
 
-  if nItems < 1:
+  if len(STAC_items) < 1 or len(Bands) < 1:
+    print('<load_STAC_items> Invalid parameter was provided!')  
     return None
   
-  print('<load_STAC_items> Bands to be downloaded:', Bands)
-  attempt = 0
-  while attempt < 15:
-    try:
-      xrDS = odc.stac.load(STAC_items,  # List of STAC items
-                           bands         = Bands,
-                           chunks        = chunk_size,
-                           crs           = ProjStr, 
-                           fail_on_error = False,
-                           resolution    =  Scale,
-                           preserve_original_order = True)
-      break
+  print('<load_STAC_items> Bands to be loaded are:', Bands)
+  xrDS = load_STAC_with_retry(STAC_items, Bands, Scale, chunk_size, ProjStr)  
 
-    except (TimeoutError, ConnectionError) as e:
-      print(f"<load_STAC_items> Proxy connection error: {e}. Retrying {attempt + 1}/5...")
-      xrDS = None
-      attempt += 1
-      if attempt < 15:
-        time.sleep(10)
-    except Exception as e:
-      print(f"<load_STAC_items> An error occurred: {e}")
-      xrDS = None 
-      break
-
+  print('<load_STAC_items> Complete calling load_STAC_with_retry function')
   if xrDS is None:
-    return xrDS
-  
+    return xrDS  
+
   #==========================================================================================================
   # Attach a dictionary that contains time tags and their corresponding cloud covers
   #==========================================================================================================
@@ -844,6 +874,112 @@ def load_STAC_items(STAC_items, Bands, chunk_size, ProjStr, Scale):
 
 
 
+
+#############################################################################################################
+# Description: This function loads a list of STAC Sentinel-2 items at 10-m resolution ONLY.
+#
+# Note:        For 20-m bands, they will be loaded at 20-m resolution first and then duplicate to 10-m 
+#              resolution.
+#
+# Revision history:  2025-Dec-03  Lixin Sun  Initial creation
+#
+#############################################################################################################
+def load_STAC_10m_items(STAC_items, Bands_20m, chunk_size, ProjStr):
+  """
+    Args:
+      STAC_items(List): A list of STAC items to be loaded;
+      Bands_20m(List): A list of 20-m resolution band names to be loaded, 10m bands are always loaded;
+      chunk_size(Dictionary): A dictionary defining the chunk sizes in X and Y dimensions;
+      ProjStr(String): A string specifying projection.
+  """
+  nItems = len(STAC_items)
+
+  if nItems < 1:
+    print('<load_STAC_10m_items> Invalid parameters are provided!')  
+    return None
+  
+  print('<load_STAC_10m_items> 20-m resolution bands to be loaded are:', Bands_20m)
+  bands_10m = ['blue', 'green', 'red', 'nir08']  # 10-m bands to be loaded
+
+  #==========================================================================================================
+  # Load 10-m and 20-m resolution band images catalog separately
+  #==========================================================================================================    
+  xrDS_10m = load_STAC_with_retry(STAC_items, bands_10m, 10, chunk_size, ProjStr)
+  
+  if xrDS_10m is None:
+    print('<load_STAC_10m_items> Failed to load 10-m resolution band images!')  
+    return None
+  
+  xrDS_10m_allbands = xrDS_10m
+
+  if len(Bands_20m) > 0:
+    xrDS_20m = load_STAC_with_retry(STAC_items, Bands_20m, 20, chunk_size, ProjStr)
+
+    if xrDS_20m is None:
+      print('<load_STAC_10m_items> Failed to load 20-m resolution band images!')  
+      return None
+  
+    #==========================================================================================================
+    # Convert 20-m to 10-m resolution images as necessary
+    #==========================================================================================================    
+    def repeat_2x_to_10m(arr20, xrDS_10m):
+      ax_y = arr20.get_axis_num("y")
+      ax_x = arr20.get_axis_num("x")
+
+      data10 = np.repeat(np.repeat(arr20.data, 2, axis=ax_y), 2, axis=ax_x)      
+      
+      temp_coords = {}
+      dims = arr20.dims
+
+      for d in dims:
+        if d == "y":
+          temp_coords["y"] = np.linspace(arr20.y[0], arr20.y[-1], data10.shape[ax_y])
+        elif d == "x":
+          temp_coords["x"] = np.linspace(arr20.x[0], arr20.x[-1], data10.shape[ax_x])
+        else:
+          temp_coords[d] = arr20.coords[d]
+      
+      arr10_tmp = xr.DataArray(data10,
+                               dims  = dims,
+                               coords=temp_coords,
+                               attrs=arr20.attrs,
+                               name=arr20.name)
+      
+      out = arr10_tmp.reindex(y=xrDS_10m.y, x=xrDS_10m.x, method=None)    # No interpolation: drop extra edge pixel
+    
+      out = out.rio.write_crs(xrDS_10m.rio.crs)
+      out = out.rio.write_transform(xrDS_10m.rio.transform())
+
+      return out
+
+    xrDS20_to10 = xr.Dataset()
+
+    for band in xrDS_20m.data_vars:
+      arr20 = xrDS_20m[band]        # <-- DataArray
+      arr10 = repeat_2x_to_10m(arr20, xrDS_10m)
+      xrDS20_to10[band] = arr10
+
+    xrDS20_to10["spatial_ref"] = xrDS_10m["spatial_ref"]
+    xrDS_10m_allbands = xr.merge([xrDS_10m, xrDS20_to10])
+
+  #==========================================================================================================
+  # Attach a dictionary that contains time tags and their corresponding cloud covers
+  #==========================================================================================================
+  item_CC = {}
+  for item in STAC_items:
+    properties = item.properties
+    #print("<load_STAC_items> item time tag: datetime: {}; CC: {}".format(properties['datetime'], properties['eo:cloud_cover']))
+    time_str = properties['datetime']
+    #dt = datetime.strptime(time_str, "%Y-%m-%dT%H:%M:%S.%fZ")
+    dt_obj  = parser.isoparse(time_str)
+    iso_str = dt_obj.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    item_CC[iso_str] = properties['eo:cloud_cover']
+  
+  xrDS_10m_allbands.attrs["item_CC"] = item_CC
+
+  #print(f'item CCs {xrDS.attrs["item_CC"]}')
+
+  return rename_spec_bands(xrDS_10m_allbands)
 
 
 
@@ -987,7 +1123,7 @@ def get_granule_mosaic(Input_tuple):
   #==========================================================================================================
   # Unpack the given tuple to obtain separate parameters
   #==========================================================================================================  
-  BaseImg, granule, StacItems, MosaicParams = Input_tuple
+  BaseImg, granule, StacItems, MosaicParams, ChunkDict = Input_tuple
 
   #==========================================================================================================
   # Extract parameters from "MosaicParams"
@@ -1000,26 +1136,32 @@ def get_granule_mosaic(Input_tuple):
   
   StartStr, EndStr = eoPM.get_time_window(MosaicParams)
   
-  chunk_size = {'x': 2000, 'y': 2000}
+  #chunk_size = 4000 
+  #chunk_dict = {'x': chunk_size, 'y': chunk_size}
+
   #==========================================================================================================
   # Load satellite images from a STAC catalog
   #==========================================================================================================
   one_granule_items = get_one_granule_items(StacItems, granule)                # Extract a list of STAC items based on an unique granule name
   filtered_items    = get_unique_STAC_items(one_granule_items, MosaicParams)   # Remain only one item from those that share the same timestamp
- 
+   
   if 'scl' in Bands:   # For Sentinel-2 images from AWS data catalog 
     #When in debugging mode, display metadata assets
     # if MosaicParams["debug"]:
     #   display_meta_assets(filtered_items['S2'], False)   
+    if Scale > 10:
+      xrDS_S2 = load_STAC_items(filtered_items['S2'], Bands, ChunkDict, ProjStr, Scale)  
+    else:
+      Bands_20m = [band for band in Bands if band not in ['blue', 'green', 'red', 'nir08']]
+      xrDS_S2   = load_STAC_10m_items(filtered_items['S2'], Bands_20m, ChunkDict, ProjStr) 
 
-    xrDS_S2 = load_STAC_items(filtered_items['S2'], Bands, chunk_size, ProjStr, Scale)  
     xrDS_LS = None  
   else:  #For both Snetinel-2 and Landsat data from LP DAAC of NASA
     S2_bands = Bands['S2'] + Bands['angle'] if InclAngles else Bands['S2']
     LS_bands = Bands['LS'] + Bands['angle'] if InclAngles else Bands['LS']
      
-    xrDS_S2 = load_STAC_items(filtered_items['S2'], S2_bands, chunk_size, ProjStr, Scale)
-    xrDS_LS = load_STAC_items(filtered_items['LS'], LS_bands, chunk_size, ProjStr, Scale)
+    xrDS_S2 = load_STAC_items(filtered_items['S2'], S2_bands, ChunkDict, ProjStr, Scale)
+    xrDS_LS = load_STAC_items(filtered_items['LS'], LS_bands, ChunkDict, ProjStr, Scale)
 
   #==========================================================================================================     
   # Preprocess the loaded xarray Dataset objects by adding sensor type, empty pixel score, and pixel 
@@ -1039,23 +1181,24 @@ def get_granule_mosaic(Input_tuple):
     EndStr   = EndStr
   )
   
-  xrDS = xrDS.chunk({'x': 2000, 'y': 2000, 'time': xrDS.sizes['time']}).map_blocks(
+  my_chunk = {'x': ChunkDict['x'], 'y':  ChunkDict['y'], 'time': xrDS.sizes['time']}             
+  xrDS = xrDS.chunk(my_chunk).map_blocks(
     attach_score_args, 
-    template = xrDS.chunk({'x': 2000, 'y': 2000, 'time': xrDS.sizes['time']})
+    template = xrDS.chunk(my_chunk)
   )
   
   #==========================================================================================================
   # Create a composite image based on compositing scores
   # Note: calling "fillna" function before invoking "argmax" function is very important!!!
   #==========================================================================================================
-  xrDS = xrDS.fillna(-10000.0).chunk({'x': 2000, 'y': 2000, 'time': xrDS.sizes['time']})
+  xrDS = xrDS.fillna(-10000.0).chunk(my_chunk)
 
   def granule_mosaic_template(xrDS, inBands, IncAngles):
     "Every variable used in this function must be input as a parameter. Global variables cannot be used!"
     mosaic_template = {}
     
     xrDA = xr.DataArray(
-      data  = dask.array.zeros((xrDS.sizes['y'], xrDS.sizes['x']), chunks=(2000, 2000), dtype=np.float32),
+      data  = dask.array.zeros((xrDS.sizes['y'], xrDS.sizes['x']), chunks=(ChunkDict['x'], ChunkDict['y']), dtype=np.float32),
       dims  = ['y', 'x'],  # Include y and x only (no time here)
       coords= {'y': xrDS['y'], 'x': xrDS['x']},
     )
@@ -1103,7 +1246,7 @@ def get_granule_mosaic(Input_tuple):
   )
   
   mosaic = mosaic.where(mosaic[eoIM.pix_date] > 0)
-  mosaic = mosaic.reindex_like(BaseImg).chunk({'x': 2000, 'y': 2000}).fillna(-10000.0)
+  mosaic = mosaic.reindex_like(BaseImg).chunk(ChunkDict).fillna(-10000.0)
   
   del xrDS, granule_mosaic_args
   gc.collect()
@@ -1300,12 +1443,17 @@ def create_mosaic_at_once_one_machine(BaseImg, unique_granules, stac_items, Mosa
     )
     client = Client(cluster)
     client.register_worker_callbacks(setup=disable_spill)
-    print(f'\n\n<<<<<<<<<< Dask dashboard is available {client.dashboard_link} >>>>>>>>>')
-  
+    print(f'\n\n<<<<<<<<<< Dask dashboard is available {client.dashboard_link} >>>>>>>>>')  
+    
+    #data = (BaseImg, unique_granules[0], stac_items, MosaicParams)
+    #get_granule_mosaic(data)
+
     #========================================================================================================
     # Submit the jobs to the clusters to process them in a parallel mode 
     #========================================================================================================
-    granule_mosaics_data = [(BaseImg, granule, stac_items, MosaicParams) for granule in unique_granules]
+    ChunkDict = MosaicParams['chunk_size']
+
+    granule_mosaics_data = [(BaseImg, granule, stac_items, MosaicParams, ChunkDict) for granule in unique_granules]
     granule_mosaics      = [client.submit(get_granule_mosaic, data) for data in granule_mosaics_data]
     
     return granule_mosaics, client, cluster, unique_name
@@ -1321,7 +1469,7 @@ def create_mosaic_at_once_one_machine(BaseImg, unique_granules, stac_items, Mosa
 # Revision history:  2024-May-24  Lixin Sun  Initial creation
 #                    2024-Jul-20  Lixin Sun  Modified to generate the final composite image tile by tile.
 #############################################################################################################
-def one_mosaic(ProdParams, CompParams, Output=True):
+def one_mosaic(AllParams, Output=True):
   '''
     Args:
       ProdParams(Dictionary): A dictionary containing all parameters related to composite image production;
@@ -1329,6 +1477,7 @@ def one_mosaic(ProdParams, CompParams, Output=True):
       Output(Boolean): An integer indicating wheter to export resulting composite image.'''
   
   mosaic_start = time.time()   #Record the start time of the whole process
+  ChunkDict = AllParams['chunk_size']
 
   #==========================================================================================================
   # Search all the STAC items based on a spatial region and a time window
@@ -1337,17 +1486,17 @@ def one_mosaic(ProdParams, CompParams, Output=True):
   #       (2) The imaging angles will be attached to each STAC item by "search_STAC_Catalog" function if S2
   #           data from AWS is used.
   #==========================================================================================================  
-  stac_items = search_STAC_Catalog(ProdParams, 100)  
+  stac_items = search_STAC_Catalog(AllParams, 100)  
   print(f"\n<period_mosaic> A total of {len(stac_items):d} items were found.\n")
 
   #When in debugging mode, display metadata assets
-  if ProdParams["debug"]:
+  if AllParams["debug"]:
     display_meta_assets(stac_items, True)   
   
   #==========================================================================================================
   # Create a base image that fully spans ROI
   #==========================================================================================================
-  base_img = get_base_Image(stac_items, ProdParams)
+  base_img = get_base_Image(stac_items, AllParams, ChunkDict)
   print('\n<period_mosaic> based mosaic image = ', base_img)
   
   #==========================================================================================================
@@ -1356,16 +1505,16 @@ def one_mosaic(ProdParams, CompParams, Output=True):
   unique_granules = get_unique_tile_names(stac_items)  #Get all unique tile names 
   print('\n<period_mosaic> The number of unique granule tiles = %d'%(len(unique_granules)))  
 
-  if ProdParams["debug"]:
-    print('\n<<<<<< The unique granule tiles = ', unique_granules)   
+  if AllParams["debug"]:
+    print('\n<<<<<< The unique granule tiles = ', unique_granules)  
 
   #==========================================================================================================
   # Create submosaic separately for each granule in parallel and on distributed workers
   #==========================================================================================================
-  if CompParams["debug"]:
-    submited_granules_mosaics, client, cluster, unique_name = create_mosaic_at_once_one_machine(base_img, unique_granules, stac_items, ProdParams)
+  if AllParams["debug"]:
+    submited_granules_mosaics, client, cluster, unique_name = create_mosaic_at_once_one_machine(base_img, unique_granules, stac_items, AllParams)
   else:
-    submited_granules_mosaics, client, cluster, unique_name = create_mosaic_at_once_distributed(base_img, unique_granules, stac_items, ProdParams)
+    submited_granules_mosaics, client, cluster, unique_name = create_mosaic_at_once_distributed(base_img, unique_granules, stac_items, AllParams)
   
   persisted_granules_mosaics = dask.persist(*submited_granules_mosaics, optimize_graph=True)
   for future, granules_mosaic in as_completed(persisted_granules_mosaics, with_results=True):
@@ -1373,7 +1522,7 @@ def one_mosaic(ProdParams, CompParams, Output=True):
     client.cancel(future)
   
   # We do the compute to get a dask array instead of a future
-  base_img = base_img.chunk({"x": 2000, "y": 2000}).compute()
+  base_img = base_img.chunk(ChunkDict).compute()
 
   #==========================================================================================================
   # Mask out the pixels with negative date value
@@ -1397,13 +1546,13 @@ def one_mosaic(ProdParams, CompParams, Output=True):
   ext_tiffs_rec = ["test"]
   period_str = "test"
   if Output:
-    ext_tiffs_rec, period_str = export_mosaic(ProdParams, mosaic)
+    ext_tiffs_rec, period_str = export_mosaic(AllParams, mosaic)
   
   #==========================================================================================================
   # Create logging files
   #========================================================================================================== 
-  dask_out_file  = Path(ProdParams["out_folder"]) / f"log_{unique_name}.out"
-  dask_directory = os.path.join(Path(ProdParams["out_folder"]), f"dask_spill_{unique_name}")
+  dask_out_file  = Path(AllParams["out_folder"]) / f"log_{unique_name}.out"
+  dask_directory = os.path.join(Path(AllParams["out_folder"]), f"dask_spill_{unique_name}")
 
   if os.path.exists(dask_out_file):
       os.remove(dask_out_file)
@@ -1492,10 +1641,11 @@ def export_mosaic(inParams, inMosaic):
   #==========================================================================================================
   spa_scale    = inParams['resolution']
   export_style = str(inParams['export_style']).lower()
-  rio_mosaic   = rio_mosaic.compute()
+  #rio_mosaic   = rio_mosaic.compute()  
   ext_saved    = []
   if 'sepa' in export_style:
-    out_bands = rio_mosaic.data_vars if spa_scale > 15 else ['blue', 'green', 'red', 'nir08', 'score', 'date']
+    #out_bands = rio_mosaic.data_vars if spa_scale > 15 else ['blue', 'green', 'red', 'nir08', 'score', 'date']
+    out_bands = rio_mosaic.data_vars
     if 'bands' in inParams:
       for band in inParams["bands"]:
         if band.lower() not in [b.lower() for b in out_bands]: 
@@ -1561,7 +1711,6 @@ def MosaicProduction(ProdParams, CompParams):
   # Generate composite images based on given input parameters
   #==========================================================================================================
   ext_tiffs_rec = []
-  period_str = ""
   all_base_tiles = []  
   
   if CompParams["entire_tile"]:

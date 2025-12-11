@@ -6,9 +6,12 @@ ATPRK downscale example (20m -> 10m) for Sentinel-2 using 4 x 10m bands as predi
 import numpy as np
 import rasterio
 import matplotlib.pyplot as plt
+import dask.array as da
 
 import eoImage as Img
 
+
+from dask import delayed, compute
 from joblib import Parallel, delayed
 from rasterio.enums import Resampling
 #from pykrige.ok import OrdinaryKriging
@@ -67,90 +70,322 @@ def local_mapping_function(VNIRImg, TargetImg, x, y, WinSize=7):
 #
 # Revision history:  2024-Nov-28  Lixin Sun  initial creation
 ###################################################################################################
-def compute_all_mappings(VNIRImg, TargetImg, Linear = True, WinSize=7, n_jobs=-1):
-  """
+# def compute_all_mappings(VNIRImg, TargetImg, Linear = True, WinSize=7, n_jobs=-1):
+#   """
+#     Inputs:
+#       VNIRImg   : (H, W, 4) - VNIR image cube [blue, green, red, NIR]
+#       TargetImg : (H, W)    - Target band image at coarse resolution
+#       WinSize   : window size for local mapping function
+#       Linear    : whether to use linear mapping only (True) or include nonlinear terms (False)
+#       n-jobs    : number of parallel jobs (-1 means all available cores)
+
+#       Returns:
+#       A_coeff   : (H, W, 4)   # coefficients a1..a4
+#       D_bias    : (H, W)      # intercept d.
+#   """
+
+#   if WinSize < 3:
+#     WinSize = 3
+
+#   H, W, C = VNIRImg.shape
+#   if TargetImg.ndim == 3:
+#     TargetImg = np.squeeze(TargetImg, axis=2)
+
+#   if TargetImg.shape[0] != H or TargetImg.shape[1] != W:
+#     raise ValueError("TargetImg must match VNIRImg spatial dimensions.")
+
+#   wr = WinSize // 2  # window radius
+
+#   #================================================================================================
+#   # Pad the given images so boundary pixels still produce full windows
+#   # Pad with edge values (replicate padding)
+#   #================================================================================================
+#   padded_VNIR = np.pad(VNIRImg, ((wr, wr), (wr, wr), (0, 0)), mode='edge')
+#   padded_Tgt  = np.pad(TargetImg, ((wr, wr), (wr, wr)), mode='edge')
+
+#   #================================================================================================
+#   # Add nolinear components to the image cube if needed
+#   #================================================================================================
+#   if not Linear:
+#     red = padded_VNIR[:, :, 2]
+#     nir = padded_VNIR[:, :, 3]
+
+#     red_nir = (red * nir)[:, :, None]
+#     red_red = (red * red)[:, :, None]
+#     nir_nir = (nir * nir)[:, :, None]
+
+#     UsedImg = np.concatenate([padded_VNIR, red_nir, red_red, nir_nir], axis=2)
+#     nCoeffs = 7
+#   else:
+#     UsedImg = padded_VNIR
+#     nCoeffs = 4
+
+#   #================================================================================================
+#   # run local mapping on all pixels in parallel
+#   #================================================================================================
+#   A_coeff = np.zeros((H, W, nCoeffs), dtype=np.float32)
+#   D_bias  = np.zeros((H, W), dtype=np.float32)
+
+#   # Function to process one row of pixels
+#   def process_row(x, UsedImg, padded_Tgt, wr, WinSize, W, nCoeffs):
+#     row_coeffs = np.zeros((W, nCoeffs), dtype=np.float32)
+#     row_bias   = np.zeros(W, dtype=np.float32)
+
+#     for y in range(W):
+#       coeffs, bias = local_mapping_function(UsedImg, padded_Tgt, x+wr, y+wr, WinSize)
+#       row_coeffs[y] = coeffs
+#       row_bias[y]   = bias
+
+#     return row_coeffs, row_bias
+
+#   # Run in parallel per row
+#   results = Parallel(n_jobs=n_jobs, backend="loky")(
+#     delayed(process_row)(x, UsedImg, padded_Tgt, wr, WinSize, W, nCoeffs) for x in range(H))
+
+# #   results = []
+# #   for x in range(H):
+# #     result = process_row(x, UsedImg, padded_Tgt, wr, WinSize, W, nCoeffs)
+# #     results.append(result)
+
+#   #================================================================================================
+#   # unpack results
+#   #================================================================================================
+#   for x, (row_coeffs, row_bias) in enumerate(results):
+#     A_coeff[x, :, :] = row_coeffs
+#     D_bias[x, :]     = row_bias
+
+#   return A_coeff, D_bias
+
+
+
+
+
+def compute_all_mappings(VNIRImg, TargetImg, Linear=True, WinSize=7, n_jobs=-1, row_block=32):
+    """
     Inputs:
       VNIRImg   : (H, W, 4) - VNIR image cube [blue, green, red, NIR]
       TargetImg : (H, W)    - Target band image at coarse resolution
       WinSize   : window size for local mapping function
       Linear    : whether to use linear mapping only (True) or include nonlinear terms (False)
-      n-jobs    : number of parallel jobs (-1 means all available cores)
+      n_jobs    : number of parallel jobs (-1 means all available cores)
+      row_block : number of rows processed per parallel job
 
-      Returns:
-      A_coeff   : (H, W, 4)   # coefficients a1..a4
-      D_bias    : (H, W)      # intercept d.
+    Returns:
+      A_coeff   : (H, W, nCoeffs)
+      D_bias    : (H, W)
+    """
+
+    if WinSize < 3:
+        WinSize = 3
+
+    H, W, C = VNIRImg.shape
+    if TargetImg.ndim == 3:
+        TargetImg = np.squeeze(TargetImg, axis=2)
+
+    if TargetImg.shape[:2] != (H, W):
+        raise ValueError("TargetImg must match VNIRImg spatial dimensions.")
+
+    wr = WinSize // 2
+
+    # Pad the images
+    padded_VNIR = np.pad(VNIRImg,  ((wr, wr), (wr, wr), (0, 0)), mode='edge')
+    padded_Tgt  = np.pad(TargetImg, ((wr, wr), (wr, wr)), mode='edge')
+
+    # Add nonlinear components
+    if not Linear:
+        red = padded_VNIR[:, :, 2]
+        nir = padded_VNIR[:, :, 3]
+
+        red_nir = (red * nir)[:, :, None]
+        red_red = (red * red)[:, :, None]
+        nir_nir = (nir * nir)[:, :, None]
+
+        UsedImg = np.concatenate([padded_VNIR, red_nir, red_red, nir_nir], axis=2)
+        nCoeffs = 7
+    else:
+        UsedImg = padded_VNIR
+        nCoeffs = 4
+
+    # Output arrays
+    A_coeff = np.zeros((H, W, nCoeffs), dtype=np.float32)
+    D_bias  = np.zeros((H, W), dtype=np.float32)
+
+    # -------------------------------------------------------------------------
+    # Function to process a block of rows
+    # -------------------------------------------------------------------------
+    def process_row_block(start_row, end_row, UsedImg, padded_Tgt, wr, WinSize, W, nCoeffs):
+        block_h = end_row - start_row
+        block_coeff = np.zeros((block_h, W, nCoeffs), dtype=np.float32)
+        block_bias  = np.zeros((block_h, W), dtype=np.float32)
+
+        for idx, x in enumerate(range(start_row, end_row)):
+            px = x + wr  # padded x location
+
+            for y in range(W):
+                coeffs, bias = local_mapping_function(
+                    UsedImg, padded_Tgt, px, y + wr, WinSize
+                )
+                block_coeff[idx, y] = coeffs
+                block_bias[idx, y]  = bias
+
+        return start_row, end_row, block_coeff, block_bias
+
+    # Build jobs as (start_row, end_row)
+    row_jobs = []
+    for start in range(0, H, row_block):
+        end = min(start + row_block, H)
+        row_jobs.append((start, end))
+
+    # Run row-blocks in parallel
+    results = Parallel(n_jobs=n_jobs, backend="loky")(
+        delayed(process_row_block)(
+            start, end, UsedImg, padded_Tgt, wr, WinSize, W, nCoeffs
+        )
+        for start, end in row_jobs
+    )
+
+    # Unpack results
+    for start, end, blk_coeff, blk_bias in results:
+        A_coeff[start:end, :, :] = blk_coeff
+        D_bias[start:end, :]     = blk_bias
+
+    return A_coeff, D_bias
+
+
+
+
+
+
+###################################################################################################
+# Description: This function computes local mapping coefficients for all pixels using DASK blocks.
+#
+# Revision history:  2024-Nov-28  Lixin Sun  initial creation
+###################################################################################################
+def compute_all_mappings_dask(VNIRImg, TargetImg, Linear=True, WinSize=7, BlockSize=256):
+  """    
+    Inputs:
+      VNIRImg   : (H, W, 4) - VNIR image cube [blue, green, red, NIR]
+      TargetImg : (H, W)    - Target band image at coarse resolution
+      Linear    : True for linear mapping, False to include nonlinear terms
+      WinSize   : int, window size (default 7)
+      BlockSize: int, size of blocks for Dask processing
+    
+    Returns:
+      A_coeff : (H, W, 4 or 7) - local coefficients for each pixel
+      D_bias  : (H, W)         - intercept for each pixel
   """
-
+    
   if WinSize < 3:
     WinSize = 3
 
   H, W, C = VNIRImg.shape
   if TargetImg.ndim == 3:
     TargetImg = np.squeeze(TargetImg, axis=2)
-
+  
   if TargetImg.shape[0] != H or TargetImg.shape[1] != W:
     raise ValueError("TargetImg must match VNIRImg spatial dimensions.")
 
-  wr = WinSize // 2  # window radius
+  wr = WinSize // 2
 
-  #================================================================================================
-  # Pad the given images so boundary pixels still produce full windows
-  # Pad with edge values (replicate padding)
-  #================================================================================================
+  # Pad images to handle borders
   padded_VNIR = np.pad(VNIRImg, ((wr, wr), (wr, wr), (0, 0)), mode='edge')
   padded_Tgt  = np.pad(TargetImg, ((wr, wr), (wr, wr)), mode='edge')
 
-  #================================================================================================
-  # Add nolinear components to the image cube if needed
-  #================================================================================================
+  # Add nonlinear terms if needed
   if not Linear:
     red = padded_VNIR[:, :, 2]
     nir = padded_VNIR[:, :, 3]
 
-    red_nir = (red * nir)[:, :, None]
-    red_red = (red * red)[:, :, None]
-    nir_nir = (nir * nir)[:, :, None]
+    red_nir = (red * nir)[..., None]
+    red_red = (red * red)[..., None]
+    nir_nir = (nir * nir)[..., None]
 
     UsedImg = np.concatenate([padded_VNIR, red_nir, red_red, nir_nir], axis=2)
+    nCoeffs = 7
   else:
     UsedImg = padded_VNIR
+    nCoeffs = 4
 
-  #================================================================================================
-  # run local mapping on all pixels in parallel
-  #================================================================================================
-  nCoeffs = 4 if Linear else 7
-  A_coeff = np.zeros((H, W, nCoeffs), dtype=np.float32)
-  D_bias  = np.zeros((H, W), dtype=np.float32)
+  # Convert to Dask arrays with chunks
+  dask_VNIR = da.from_array(UsedImg, chunks=(BlockSize, BlockSize, UsedImg.shape[2]))
+  dask_Tgt  = da.from_array(padded_Tgt, chunks=(BlockSize, BlockSize))
 
-  # Function to process one row of pixels
-  def process_row(x, UsedImg, padded_Tgt, wr, WinSize, W, nCoeffs):
-    row_coeffs = np.zeros((W, nCoeffs), dtype=np.float32)
-    row_bias   = np.zeros(W, dtype=np.float32)
+  # Define function to process a block
+  def process_block(vnir_block, tgt_block):
+    H_blk, W_blk, _ = vnir_block.shape
+    A_coeff_blk = np.zeros((H_blk, W_blk, nCoeffs), dtype=np.float32)
+    D_bias_blk  = np.zeros((H_blk, W_blk), dtype=np.float32)
+    
+    #if tgt_block.shape[0] == H_blk and tgt_block.shape[1] == W_blk:
+    for i in range(H_blk):
+      for j in range(W_blk):
+        coeffs, bias = local_mapping_function(vnir_block, tgt_block, i, j, WinSize)
+        A_coeff_blk[i, j, :] = coeffs
+        D_bias_blk[i, j] = bias    
+  
+    return A_coeff_blk, D_bias_blk
+   
+  # Wrap with delayed for Dask
+  #def delayed_block(vnir_block, tgt_block):
+  #  return delayed(process_block)(vnir_block, tgt_block)
+  delayed_blocks = []
+  for i in range(0, H + 2*wr, BlockSize):
+    for j in range(0, W + 2*wr, BlockSize):
+      v_block = dask_VNIR[i:i+BlockSize, j:j+BlockSize, :].compute()
+      t_block = dask_Tgt[i:i+BlockSize, j:j+BlockSize].compute()
+      delayed_blocks.append(delayed(process_block)(v_block, t_block))
 
-    for y in range(W):
-      coeffs, bias = local_mapping_function(UsedImg, padded_Tgt, x+wr, y+wr, WinSize)
-      row_coeffs[y] = coeffs
-      row_bias[y]   = bias
+  # Compute all blocks in parallel
+  results = compute(*delayed_blocks, scheduler='threads')  
 
-    return row_coeffs, row_bias
+#   delayed_blocks = []
+#   for i in range(0, dask_VNIR.shape[0], BlockSize):
+#     for j in range(0, dask_VNIR.shape[1], BlockSize):
+#       v_block = dask_VNIR[i:i+BlockSize, j:j+BlockSize, :]  #.compute()
+#       t_block = dask_Tgt[i:i+BlockSize, j:j+BlockSize]  #.compute()
+#       delayed_blocks.append(delayed(process_block)(v_block, t_block))
+#       #delayed_blocks.append(process_block(v_block, t_block))
 
-  # Run in parallel per row
-  results = Parallel(n_jobs=n_jobs, backend="loky")(
-    delayed(process_row)(x, UsedImg, padded_Tgt, wr, WinSize, W, nCoeffs) for x in range(H))
+#   # Compute all blocks in parallel lazily
+#   results = compute(*delayed_blocks, scheduler='threads')
+  #results = list(compute(*delayed_blocks, scheduler='single-threaded'))
+  #results = delayed_blocks  # already computed above
 
-#   results = []
-#   for x in range(H):
-#     result = process_row(x, UsedImg, padded_Tgt, wr, WinSize, W, nCoeffs)
-#     results.append(result)
+  print("Type of results:", type(results))
+  print("Length of results:", len(results))
+  print("Type of first element:", type(results[0]))
+  print("length of first element:", len(results[0]))
+  print("content of first element:", results[0])
 
-  #================================================================================================
-  # unpack results
-  #================================================================================================
-  for x, (row_coeffs, row_bias) in enumerate(results):
-    A_coeff[x, :, :] = row_coeffs
-    D_bias[x, :]     = row_bias
+  # Combine results into full arrays
+  A_coeff = np.zeros((H + 2*wr, W + 2*wr, nCoeffs), dtype=np.float32)
+  D_bias  = np.zeros((H + 2*wr, W + 2*wr), dtype=np.float32)
+
+  blk_idx = 0
+  bh, bw = BlockSize, BlockSize
+  for i in range(0, H + 2*wr, bh):
+    for j in range(0, W + 2*wr, bw):
+      blk = results[blk_idx]    
+
+      _, a_blk, d_blk = results[blk_idx]
+
+      print("[DEBUG] a_blk={}, type={}, length={}".format(a_blk, type(a_blk), len(a_blk)))
+    #   blk = results[blk_idx]
+    #   a_blk = blk["A"]
+    #   d_blk = blk["D"]
+      H_blk, W_blk, _ = a_blk.shape
+
+      A_coeff[i:i+H_blk, j:j+W_blk, :] = a_blk
+      D_bias[i:i+H_blk, j:j+W_blk] = d_blk
+      blk_idx += 1
+
+  # Crop padded borders
+  A_coeff = A_coeff[wr:wr+H, wr:wr+W, :]
+  D_bias  = D_bias[wr:wr+H, wr:wr+W]
 
   return A_coeff, D_bias
+
+
 
 
 
@@ -179,9 +414,13 @@ def apply_mapping_coeffs(HR_VNIRImg, LR_Coeffs_Map, LR_bias_Map, H_to_L_ratio=2)
   #================================================================================================
   # Upsample the low-resolution coefficients to high-resolution by repeating in 2×2 blocks
   #================================================================================================
-  HR_Coeffs_map = np.repeat(np.repeat(LR_Coeffs_Map, H_to_L_ratio, axis=0), H_to_L_ratio, axis=1)   # shape → (HR_H, HR_W, 4)
-  HR_bias_map   = np.repeat(np.repeat(LR_bias_Map,   H_to_L_ratio, axis=0), H_to_L_ratio, axis=1)   # shape → (LR_H, LR_W)
-
+  if H_to_L_ratio > 1:
+    HR_Coeffs_map = np.repeat(np.repeat(LR_Coeffs_Map, H_to_L_ratio, axis=0), H_to_L_ratio, axis=1)   # shape → (HR_H, HR_W, 4)
+    HR_bias_map   = np.repeat(np.repeat(LR_bias_Map,   H_to_L_ratio, axis=0), H_to_L_ratio, axis=1)   # shape → (LR_H, LR_W)
+  else:
+    HR_Coeffs_map = LR_Coeffs_Map
+    HR_bias_map   = LR_bias_Map
+    
   #================================================================================================
   # Ensure dimensions match exactly (crop if necessary)
   #================================================================================================
@@ -193,11 +432,11 @@ def apply_mapping_coeffs(HR_VNIRImg, LR_Coeffs_Map, LR_bias_Map, H_to_L_ratio=2)
   #================================================================================================
   if nCoeffs == 4:
     HR_TargetImg = (
-        HR_Coeffs_map[:, :, 0] * HR_VNIRImg[:, :, 0] +
-        HR_Coeffs_map[:, :, 1] * HR_VNIRImg[:, :, 1] +
-        HR_Coeffs_map[:, :, 2] * HR_VNIRImg[:, :, 2] +
-        HR_Coeffs_map[:, :, 3] * HR_VNIRImg[:, :, 3] +
-        HR_bias_map)
+      HR_Coeffs_map[:, :, 0] * HR_VNIRImg[:, :, 0] +
+      HR_Coeffs_map[:, :, 1] * HR_VNIRImg[:, :, 1] +
+      HR_Coeffs_map[:, :, 2] * HR_VNIRImg[:, :, 2] +
+      HR_Coeffs_map[:, :, 3] * HR_VNIRImg[:, :, 3] +
+      HR_bias_map)
   elif nCoeffs == 7:
     red = HR_VNIRImg[:, :, 2]
     nir = HR_VNIRImg[:, :, 3]
@@ -232,20 +471,19 @@ def Piecewise_SuperResolution(DataDir, Month, TargetName='swir16_'):
   VNIR_Img, VNIR_mask, VNIR_profile       = Img.load_TIF_files_to_npa(DataDir, HR_bands, Month)
   target_Img, target_mask, target_profile = Img.load_TIF_files_to_npa(DataDir, [TargetName], Month)
 
-  coeff_map, offset_map = compute_all_mappings(VNIR_Img, target_Img, False, 7)
+  coeff_map, offset_map = compute_all_mappings(VNIR_Img, target_Img, False, 7, -1, 50)
+  #coeff_map, offset_map = compute_all_mappings(VNIR_Img, target_Img, True, 7, 256)
 
-  HR_Target = apply_mapping_coeffs(VNIR_Img, coeff_map, offset_map, 2)
+  HR_Target = apply_mapping_coeffs(VNIR_Img, coeff_map, offset_map, 1)
 
-  outFile = DataDir + '\\' + 'cluster_map_20m.tif'
+  outFile = DataDir + '\\' + 'super_resed_map_20m.tif'
 
   Img.save_npa_as_geotiff(outFile, HR_Target, target_profile)
 
 
-
-
 DataDir = 'C:\\Work_Data\\S2_mosaic_vancouver2020_20m_for_testing_gap_filling'
 Piecewise_SuperResolution(DataDir, 'Aug', 'swir16_')
-
+print("Done ATPRK super-resolution.")
 
 
 

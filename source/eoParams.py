@@ -4,6 +4,7 @@ import json
 import pyproj
 import sys
 import netrc
+import psutil
 import argparse
 import subprocess
 import eoImage as eoIM
@@ -48,7 +49,7 @@ all_param_keys = ['sensor', 'ID', 'unit', 'bands', 'year', 'nbYears', 'months', 
                   'out_location', 'resolution', 'GCS_bucket', 'out_folder', 'export_style', 'out_datatype', 'projection', 'CloudScore',
                   'monthly', 'start_dates', 'end_dates', 'regions', 'scene_ID', 'current_time', 'current_region', 
                   'time_str','cloud_cover', 'SsrData', 'Criteria', 'IncludeAngles', 'debug', 'entire_tile',
-                  'nodes', 'node_memory', 'number_workers', 'account', 'standardized']
+                  'nodes', 'node_memory', 'number_workers', 'chunk_size', 'account', 'standardized']
 
 
 
@@ -376,7 +377,7 @@ def set_spatial_region(inParams, region_name):
 # Revision history:  2024-Jun-07  Lixin Sun  Initial creation
 #       
 #############################################################################################################
-def valid_user_params(UserParams):
+def valid_ProdParams(UserParams):
   #==========================================================================================================
   # Ensure all the keys in user's parameter dictionary are valid
   #==========================================================================================================
@@ -597,6 +598,88 @@ def valid_user_params(UserParams):
 
 
 
+
+
+def valid_CompParams(CompParams):
+  #==========================================================================================================
+  # Ensure all the keys in user's parameter dictionary are valid
+  #==========================================================================================================
+  all_valid    = True
+  user_keys    = list(CompParams.keys())
+  default_keys = all_param_keys
+  n_user_keys  = len(user_keys)
+
+  key_presence = [element in default_keys for element in user_keys]
+  for index, pres in enumerate(key_presence):
+    if pres == False and index < n_user_keys:
+      all_valid = False
+      print('<valid_CompParams> \'{}\' key in given parameter dictionary is invalid!'.format(user_keys[index]))
+  
+  if not all_valid:
+    return all_valid, None  
+
+  outParams = CompParams  
+
+  #==========================================================================================================
+  # Fill or valid 'number_workers' parameter
+  #==========================================================================================================
+  nCPUs = os.cpu_count()
+  if 'number_workers' not in outParams:
+    outParams['number_workers'] = nCPUs/2
+  else:  
+    nWorkers = int(outParams['number_workers'])
+    if nWorkers < 1 or nWorkers > nCPUs:
+      outParams['number_workers'] = nCPUs/2
+
+  #==========================================================================================================
+  # Fill 'debug' and 'entire_tile' parameters
+  #==========================================================================================================
+  if 'debug' not in outParams:
+    outParams['debug'] = True
+  
+  if 'entire_tile' not in outParams:
+    outParams['entire_tile'] = True
+
+  #==========================================================================================================
+  # Fill 'nodes' parameter
+  #==========================================================================================================
+  if 'nodes' not in outParams:
+    outParams['nodes'] = 1
+  else:
+    nNodes = int(outParams['nodes'])
+    if nNodes < 1 or nNodes > 10:
+      outParams['nodes'] = 1
+
+  #==========================================================================================================
+  # Fill 'node_memory' parameter
+  #==========================================================================================================
+  RAM_size = int(psutil.virtual_memory().total / (1024 ** 3))  # in GB
+  used_RAM = RAM_size-4 if RAM_size < 32 else RAM_size-8 if RAM_size < 128 else RAM_size-16
+  if 'node_memory' not in outParams:  
+    outParams['node_memory'] = str(used_RAM/outParams['nodes']) +'G'
+  else:
+    node_memory = int("".join(re.findall(r"\d", str(outParams['node_memory'])))) 
+    if node_memory < 0 or node_memory > used_RAM:
+      outParams['node_memory'] = str(used_RAM/outParams['nodes']) +'G'
+
+  #==========================================================================================================
+  # Fill 'chunk_size' parameter
+  #========================================================================================================== 
+  if 'chunk_size' not in outParams:
+    outParams['chunk_size'] = {'x': 2000, 'y': 2000}
+  else:
+    x_size = int(outParams['chunk_size']['x'])
+    y_size = int(outParams['chunk_size']['y'])
+    if x_size < 500 or y_size < 500:
+      outParams['chunk_size'] = {'x': 2000, 'y': 2000}
+    elif x_size > 5000 or y_size > 5000:
+      outParams['chunk_size'] = {'x': 5000, 'y': 5000}
+
+  return all_valid, outParams
+
+
+
+
 #############################################################################################################
 # Description: This function creates the start and end dates for a list of user-specified months and save 
 #              them into two lists with 'start_dates' and 'end_dates' keys.
@@ -697,7 +780,7 @@ def standardize_params(inParams):
   #==========================================================================================================
   # Validate the given parameters 
   #==========================================================================================================
-  all_valid, out_Params = valid_user_params(inParams)
+  all_valid, out_Params = valid_ProdParams(inParams)
 
   if all_valid is False or out_Params is None:
     return None
@@ -770,52 +853,25 @@ def get_mosaic_params(ProdParams, CompParams):
     print('<get_mosaic_params> Either "ProdParams" or "CompParams" is missing!')
     return None
   
-  outParams = standardize_params(ProdParams)  # Modify default parameter dictionary with a given one
-  if outParams is None:
+  prod_params = standardize_params(ProdParams)  # Modify default parameter dictionary with a given one
+  if prod_params is None:
+    print('<get_mosaic_params> Standardization of ProdParams failed!')
     return None
   
-  outParams['prod_names'] = ['mosaic']      # Of course, product name should be always 'mosaic'  
-
-  #==========================================================================================================
-  # Get ONE valid time window and ONE valid spatial region, respectively
-  #==========================================================================================================
-  # StartStr, EndStr = get_time_window(ProdParams)
-  # if StartStr is None or EndStr is None:
-  #   print('\n<get_mosaic_params> Invalid time window was defined!!!')
-  #   return None
-  # else:
-  #   outParams['StartStr'] = StartStr
-  #   outParams['EndStr']   = EndStr
-
-  # Region = get_spatial_region(ProdParams)
+  prod_params['prod_names'] = ['mosaic']      # Of course, product name should be always 'mosaic'  
   
-  # if Region is None:
-  #   print('\n<get_mosaic_params> Invalid spatial region was defined!!!')
-  #   return None
-  # else: 
-  #   outParams['Region'] = Region
-
-  #==========================================================================================================
-  # Prepare other required parameters and query criteria
-  #==========================================================================================================
-  # outParams['projection']  = str(ProdParams['projection']) if 'projection' in ProdParams else 'EPSG:3979'
-  # outParams['resolution']  = int(ProdParams['resolution']) if 'resolution' in ProdParams else 20
-  # outParams['SsrData']     = eoIM.SSR_META_DICT[str(ProdParams['sensor']).upper()]
-
-  # ssr_code = outParams['SsrData']['SSR_CODE']
-  # if outParams['resolution'] < 15 and (ssr_code < eoIM.MAX_LS_CODE or ssr_code > eoIM.S2B_sensor):
-  #   print('<get_mosaic_params> Specified spatial resolution does not match sensor type!') 
-  #   return None
-
-  #outParams['Criteria'] = get_query_conditions(outParams, StartStr, EndStr, Region)
-
   #==========================================================================================================
   # Merge CompParams into "outParams"
   #==========================================================================================================
-  for key, value in CompParams.items():
-    outParams.update({key: value})
+  all_vali, comp_params = valid_CompParams(CompParams)
+  if not all_vali or comp_params is None:
+    print('<get_mosaic_params> Validation of CompParams failed!')
+    return None
+  
+  for key, value in comp_params.items():
+    prod_params.update({key: value})
 
-  return outParams
+  return prod_params
 
 
 
