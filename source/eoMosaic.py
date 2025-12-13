@@ -40,8 +40,9 @@ import dask.diagnostics as ddiag
 import xml.etree.ElementTree as ET
 import xml.etree.ElementTree as ET
 from collections import defaultdict
-from dask.distributed import as_completed
 from urllib3.exceptions import TimeoutError, ConnectionError
+from dask.distributed import as_completed
+from dask.distributed import Client, LocalCluster
 
 odc.stac.configure_rio(cloud_defaults = True, GDAL_HTTP_UNSAFESSL = 'YES')
 dask.config.set(**{'array.slicing.split_large_chunks': True})
@@ -436,7 +437,7 @@ def get_base_Image(StacItems, MosaicParams, ChunkDict):
   #==========================================================================================================
   # Ensure the base image is a DASK backed xarray dataset
   #==========================================================================================================
-  base_image_is_read = False  
+  base_image_is_read = False    
   i = 0 
   while not base_image_is_read and i < nb_tries:
     try:
@@ -445,8 +446,9 @@ def get_base_Image(StacItems, MosaicParams, ChunkDict):
         break  # Data already loaded, break the loop
 
       # Attempt to load the STAC item and process it
+      load_bands = get_load_bands(StacItems[i], Bands, InclAngles)
       with odc.stac.load([StacItems[i]],
-                        bands  = get_load_bands(StacItems[i], Bands, InclAngles),
+                        bands  = load_bands,
                         chunks = ChunkDict,
                         crs    = ProjStr, 
                         resolution = Scale, 
@@ -707,8 +709,8 @@ def get_load_bands(StacItem, Bands, IncludeAngles):
   
   scene_id   = str(StacItem.id).lower()
   load_bands = None
-
-  if 's2a' in scene_id or 's2b' in scene_id:
+  S2_names = ['s2a', 's2b', 's2c', 's2d']
+  if any(name in scene_id for name in S2_names):
     load_bands = Bands
   elif 'hls.s30' in scene_id:
     load_bands = Bands['S2'] + Bands['angle'] if IncludeAngles == True else Bands['S2']
@@ -1106,6 +1108,57 @@ def attach_AngleBands(xrDS, StacItems):
   
   return xrDS
 
+
+
+
+
+
+
+
+
+def _extract_base_grid(BaseImg):
+    """Create a lightweight description of BaseImg that workers can use to reindex.
+
+    The returned dict contains small numpy arrays for coordinates and minimal
+    spatial reference information if present.
+    """
+    base_grid = {}
+
+    # Coordinates (as numpy arrays)
+    try:
+        base_grid["x"] = np.asarray(BaseImg.coords["x"].values)
+        base_grid["y"] = np.asarray(BaseImg.coords["y"].values)
+    except Exception:
+        # Fallback for odd datasets: try index lookup
+        base_grid["x"] = np.asarray(BaseImg["x"].values) if "x" in BaseImg.coords else np.asarray(BaseImg.coords[list(BaseImg.coords)[0]].values)
+        base_grid["y"] = np.asarray(BaseImg["y"].values) if "y" in BaseImg.coords else np.asarray(BaseImg.coords[list(BaseImg.coords)[1]].values)
+
+    # Attempt to capture spatial ref if stored as coordinate variable or attribute
+    if "spatial_ref" in BaseImg.data_vars:
+        try:
+            # If it's a rasterio style object, keep as small array or attribute
+            sr = BaseImg["spatial_ref"]
+            # Many datasets include a single-value spatial_ref; store its attrs if any
+            base_grid["spatial_ref"] = sr.attrs if hasattr(sr, "attrs") else None
+        except Exception:
+            base_grid["spatial_ref"] = None
+    else:
+        base_grid["spatial_ref"] = BaseImg.attrs.get("spatial_ref", None)
+
+    # Keep a tiny template Dataset for reindexing (only coords)
+    base_grid["template_coords"] = {"x": base_grid["x"], "y": base_grid["y"]}
+
+    return base_grid
+
+
+
+
+
+
+
+
+
+
 #############################################################################################################
 # Description: 
 # 
@@ -1123,7 +1176,8 @@ def get_granule_mosaic(Input_tuple):
   #==========================================================================================================
   # Unpack the given tuple to obtain separate parameters
   #==========================================================================================================  
-  BaseImg, granule, StacItems, MosaicParams, ChunkDict = Input_tuple
+  BaseImg, granule, StacItems, MosaicParams = Input_tuple
+  #BaseImgRefGrid, granule, StacItems, MosaicParams = Input_tuple
 
   #==========================================================================================================
   # Extract parameters from "MosaicParams"
@@ -1133,11 +1187,9 @@ def get_granule_mosaic(Input_tuple):
   Scale      = MosaicParams['resolution']
   Bands      = MosaicParams['Criteria']['bands']  
   InclAngles = MosaicParams['IncludeAngles']
-  
-  StartStr, EndStr = eoPM.get_time_window(MosaicParams)
-  
-  #chunk_size = 4000 
-  #chunk_dict = {'x': chunk_size, 'y': chunk_size}
+  ChunkDict  = MosaicParams['chunk_size']
+
+  StartStr, EndStr = eoPM.get_time_window(MosaicParams)  
 
   #==========================================================================================================
   # Load satellite images from a STAC catalog
@@ -1242,16 +1294,36 @@ def get_granule_mosaic(Input_tuple):
 
   mosaic = xrDS.map_blocks(
     granule_mosaic_args, 
-    template=granule_mosaic_template(xrDS, Bands, InclAngles)  # Pass the template (same structure as xrDS)
+    template = granule_mosaic_template(xrDS, Bands, InclAngles)  # Pass the template (same structure as xrDS)
   )
   
-  mosaic = mosaic.where(mosaic[eoIM.pix_date] > 0)
-  mosaic = mosaic.reindex_like(BaseImg).chunk(ChunkDict).fillna(-10000.0)
-  
+  mosaic         = mosaic.where(mosaic[eoIM.pix_date] > 0)
+  mosaic_aligned = mosaic.reindex_like(BaseImg).chunk(ChunkDict).fillna(-10000.0)
+  #mosaic_aligned = mosaic.reindex_like(BaseImgRefGrid).chunk(ChunkDict).fillna(-10000.0)  
+
+  # ==========================================================================================
+  # NEW PART — Align mosaic to the BaseImg reference grid (subregion only)
+  # ==========================================================================================
+  # Compute the mosaic spatial window
+  # xmin = float(mosaic.x.min())
+  # xmax = float(mosaic.x.max())
+  # ymin = float(mosaic.y.min())
+  # ymax = float(mosaic.y.max())
+
+  # # Extract only overlapping region of BaseImg reference grid
+  # BaseSubset = BaseImgRefGrid.sel(
+  #     x=slice(xmin, xmax),
+  #     y=slice(ymax, ymin)  # S2 y axis decreases
+  # )
+
+  # # Align perfectly — identical x/y coordinates
+  # mosaic_aligned, _ = xr.align(mosaic, BaseSubset, join="right")
+  # mosaic_aligned = mosaic_aligned.chunk(ChunkDict).fillna(-10000.0)
+
   del xrDS, granule_mosaic_args
   gc.collect()
   
-  return mosaic
+  return mosaic_aligned
   
 
 
@@ -1424,25 +1496,30 @@ def create_mosaic_at_once_one_machine(BaseImg, unique_granules, stac_items, Mosa
     
     #========================================================================================================
     # Create DASK local clusters for computation
+    # Note: (1) always use ONR|E thread for each worker;
+    #       (2) always set a memory limit for each Dask owrker 
     #========================================================================================================
-    def disable_spill():
-      dask.config.set({
+    dask.config.set({
         'distributed.comm.retry.count': 5,
         'distributed.comm.timeouts.tcp' : 18000,
         'distributed.comm.timeouts.connect': 18000,
-        'distributed.worker.memory.target': 1, 
-        'distributed.worker.memory.spill': 0.95,
-        'distributed.worker.memory.terminate': 0.95 
-        })
+
+        # Memory thresholds for workers
+        'distributed.worker.memory.target': 1.0,     # start spilling only at full memory
+        'distributed.worker.memory.spill': 1.0,      # spill aggressively at full memory
+        'distributed.worker.memory.pause': 1.0,      # do not pause task submission 
+        'distributed.worker.memory.terminate': 2.0   # effectively prevent worker termination
+        })    
       
     cluster = LocalCluster(
-      n_workers = MosaicParams["number_workers"],
-      threads_per_worker = 3,
-      memory_limit = MosaicParams["node_memory"],
-      local_directory = tmp_directory,
+      n_workers          = MosaicParams["number_workers"],
+      threads_per_worker = 1,  # always use ONE, more threads does not make computation faster
+      memory_limit       = MosaicParams["node_memory"],   # the memory limit for each worker
+      local_directory    = tmp_directory,
     )
+
     client = Client(cluster)
-    client.register_worker_callbacks(setup=disable_spill)
+    #client.register_worker_callbacks(setup=disable_spill)
     print(f'\n\n<<<<<<<<<< Dask dashboard is available {client.dashboard_link} >>>>>>>>>')  
     
     #data = (BaseImg, unique_granules[0], stac_items, MosaicParams)
@@ -1451,12 +1528,27 @@ def create_mosaic_at_once_one_machine(BaseImg, unique_granules, stac_items, Mosa
     #========================================================================================================
     # Submit the jobs to the clusters to process them in a parallel mode 
     #========================================================================================================
-    ChunkDict = MosaicParams['chunk_size']
+    # def build_reference_grid(BaseImg):
+    #   ref_grid = xr.Dataset(
+    #     coords={
+    #         'x': BaseImg['x'],
+    #         'y': BaseImg['y'],
+    #         'spatial_ref': BaseImg['spatial_ref']
+    #     }
+    #   )
+      
+    #   return ref_grid
+    
+    # BaseReferGrid = build_reference_grid(BaseImg)
 
-    granule_mosaics_data = [(BaseImg, granule, stac_items, MosaicParams, ChunkDict) for granule in unique_granules]
+    granule_mosaics_data = [(BaseImg, granule, stac_items, MosaicParams) for granule in unique_granules]
+    #granule_mosaics_data = [(BaseReferGrid, granule, stac_items, MosaicParams) for granule in unique_granules]
     granule_mosaics      = [client.submit(get_granule_mosaic, data) for data in granule_mosaics_data]
     
     return granule_mosaics, client, cluster, unique_name
+
+
+
 
 
 
@@ -1517,7 +1609,7 @@ def one_mosaic(AllParams, Output=True):
     submited_granules_mosaics, client, cluster, unique_name = create_mosaic_at_once_distributed(base_img, unique_granules, stac_items, AllParams)
   
   persisted_granules_mosaics = dask.persist(*submited_granules_mosaics, optimize_graph=True)
-  for future, granules_mosaic in as_completed(persisted_granules_mosaics, with_results=True):
+  for future, granules_mosaic in as_completed(persisted_granules_mosaics, with_results=True):    
     base_img = merge_granule_mosaics(granules_mosaic, base_img, eoIM.pix_score)
     client.cancel(future)
   
@@ -1527,27 +1619,29 @@ def one_mosaic(AllParams, Output=True):
   #==========================================================================================================
   # Mask out the pixels with negative date value
   #========================================================================================================== 
-  mosaic = base_img.where(base_img[eoIM.pix_date] > 0)
-
-  mosaic_stop = time.time()
-  mosaic_time = (mosaic_stop - mosaic_start)/60
-
-  try:
-    client.close()
-    cluster.close()
-  except asyncio.CancelledError:
-    print("Cluster is closed!")
-
-  print('\n\n<<<<<<<<<< The total elapsed time for generating the mosaic = %6.2f minutes>>>>>>>>>'%(mosaic_time))
+  mosaic = base_img.where(base_img[eoIM.pix_date] > 0) 
 
   #==========================================================================================================
   # Output resultant mosaic as required
   #========================================================================================================== 
-  ext_tiffs_rec = ["test"]
-  period_str = "test"
   if Output:
-    ext_tiffs_rec, period_str = export_mosaic(AllParams, mosaic)
-  
+    export_mosaic(AllParams, mosaic)
+    print('\n<<<<<<<<<< Complete saving composite images >>>>>>>>>')
+
+  #==========================================================================================================
+  # Close the cluster and client
+  #========================================================================================================== 
+  try:
+    client.close(timeout=600)
+    cluster.close(timeout=600)
+
+  except asyncio.CancelledError:
+    print("Cluster is closed!")
+
+  mosaic_stop = time.time()
+  mosaic_time = (mosaic_stop - mosaic_start)/60 
+  print('\n\n<<<<<< The total elapsed time for mosaic generation = %6.2f minutes >>>>>>'%(mosaic_time))
+
   #==========================================================================================================
   # Create logging files
   #========================================================================================================== 
@@ -1566,7 +1660,10 @@ def one_mosaic(AllParams, Output=True):
   else:
       print(f"Directory '{dask_directory}' does not exist.")
   
-  return ext_tiffs_rec, period_str, mosaic
+  return mosaic
+
+
+
 
 
 
@@ -1666,7 +1763,7 @@ def export_mosaic(inParams, inMosaic):
     rio_mosaic.to_netcdf(output_path)
     ext_saved.append("mosaic")
   
-  return ext_saved, period_str
+  #return ext_saved, period_str
 
 
 def get_slurm_node_cpu_cores():
@@ -1684,73 +1781,3 @@ def get_slurm_node_cpu_cores():
           else:
               return 1
           
-
-
-
-#############################################################################################################
-# Description: This function can be used to perform mosaic production
-#
-#############################################################################################################
-def MosaicProduction(ProdParams, CompParams):
-  '''Produces monthly biophysical parameter maps for a number of tiles and months.
-
-     Args:
-       ProdParams(Python Dictionary): A dictionary containing input parameters related to production;
-       CompParams(Python Dictionary): A dictionary containing input parameters related to used computing environment.
-  '''
-  #==========================================================================================================
-  # Standardize the parameter dictionaries so that they are applicable for mosaic generation
-  #==========================================================================================================
-  usedParams = eoPM.get_mosaic_params(ProdParams, CompParams)  
-    
-  if usedParams is None:
-    print('<MosaicProduction> Inconsistent input parameters!')
-    return None
-  
-  #==========================================================================================================
-  # Generate composite images based on given input parameters
-  #==========================================================================================================
-  ext_tiffs_rec = []
-  all_base_tiles = []  
-  
-  if CompParams["entire_tile"]:
-    for tile_name in usedParams['tile_names']:
-      subtiles = eoTG.get_subtile_names(tile_name)
-      for subtile in subtiles:            
-        tile_params = copy.deepcopy(usedParams)
-        print(tile_params)
-        tile_params['tile_names'] = [subtile]
-        
-        tile_params = eoPM.get_mosaic_params(tile_params, CompParams)
-        if len(ext_tiffs_rec) == 0:
-          ext_tiffs_rec, period_str, mosaic = one_mosaic(tile_params, CompParams)
-        else: 
-          _, _, mosaic = one_mosaic(tile_params, CompParams)
-
-        all_base_tiles.append(tile_name)
-  else:
-    region_names = usedParams['regions'].keys()    # A list of region names
-    nTimes       = len(usedParams['start_dates'])  # The number of time windows
-
-    for reg_name in region_names:
-      # Loop through each spatial region
-      usedParams = eoPM.set_spatial_region(usedParams, reg_name)
-      
-      for TIndex in range(nTimes):
-        # Produce vegetation parameter porducts for each time window
-        usedParams = eoPM.set_current_time(usedParams, TIndex)
-
-        # Produce and export products in a specified way (a compact image or separate images)      
-        out_style = str(usedParams['export_style']).lower()
-        if out_style.find('comp') > -1:
-          print('\n<MosaicProduction> Generate and export mosaic images in one file .......')
-          #out_params = compact_params(mosaic, SsrData, ClassImg)
-
-          # Export the 64-bits image to either GD or GCS
-          #export_compact_params(fun_Param_dict, region, out_params, task_list)
-
-        else: 
-          # Produce and export vegetation parameetr maps for a time period and a region
-          print('\n<MosaicProduction> Generate and export separate mosaic images......')        
-          one_mosaic(usedParams, CompParams)
- 

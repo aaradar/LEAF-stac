@@ -49,7 +49,7 @@ all_param_keys = ['sensor', 'ID', 'unit', 'bands', 'year', 'nbYears', 'months', 
                   'out_location', 'resolution', 'GCS_bucket', 'out_folder', 'export_style', 'out_datatype', 'projection', 'CloudScore',
                   'monthly', 'start_dates', 'end_dates', 'regions', 'scene_ID', 'current_time', 'current_region', 
                   'time_str','cloud_cover', 'SsrData', 'Criteria', 'IncludeAngles', 'debug', 'entire_tile',
-                  'nodes', 'node_memory', 'number_workers', 'chunk_size', 'account', 'standardized']
+                  'nodes', 'node_memory', 'number_workers', 'worker_threads', 'chunk_size', 'account', 'standardized']
 
 
 
@@ -619,17 +619,18 @@ def valid_CompParams(CompParams):
     return all_valid, None  
 
   outParams = CompParams  
-
+  
   #==========================================================================================================
   # Fill or valid 'number_workers' parameter
   #==========================================================================================================
   nCPUs = os.cpu_count()
+
   if 'number_workers' not in outParams:
-    outParams['number_workers'] = nCPUs/2
+    outParams['number_workers'] = int((nCPUs-2)/2)  # Assume 2 threads per worker
   else:  
     nWorkers = int(outParams['number_workers'])
-    if nWorkers < 1 or nWorkers > nCPUs:
-      outParams['number_workers'] = nCPUs/2
+    if nWorkers < 1 or nWorkers > nCPUs-2:
+      outParams['number_workers'] = int((nCPUs-2)/2)  # Assume 2 threads per worker
 
   #==========================================================================================================
   # Fill 'debug' and 'entire_tile' parameters
@@ -666,14 +667,14 @@ def valid_CompParams(CompParams):
   # Fill 'chunk_size' parameter
   #========================================================================================================== 
   if 'chunk_size' not in outParams:
-    outParams['chunk_size'] = {'x': 2000, 'y': 2000}
+    outParams['chunk_size'] = {'x': 2048, 'y': 2048}
   else:
     x_size = int(outParams['chunk_size']['x'])
     y_size = int(outParams['chunk_size']['y'])
     if x_size < 500 or y_size < 500:
-      outParams['chunk_size'] = {'x': 2000, 'y': 2000}
+      outParams['chunk_size'] = {'x': 2048, 'y': 2048}
     elif x_size > 5000 or y_size > 5000:
-      outParams['chunk_size'] = {'x': 5000, 'y': 5000}
+      outParams['chunk_size'] = {'x': 4096, 'y': 4096}
 
   return all_valid, outParams
 

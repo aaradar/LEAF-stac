@@ -49,7 +49,7 @@ def create_LEAF_maps(ProdParams, CompParams):
   prod_names = ProdParams['prod_names']
   #print(f'\n<create_LEAF_maps> all parameters for generating mosaic: {ProdParams}')
 
-  ext_tiffs_rec, period_str, mosaic = eoMz.one_mosaic(ProdParams, CompParams, False)
+  mosaic = eoMz.one_mosaic(ProdParams, CompParams, False)
   print('\n<create_LEAF_maps> The bands in mosaic image:', mosaic.data_vars)
   # print('\n<create_LEAF_maps> ext_tiffs_rec = ', ext_tiffs_rec)
   # print('\n<create_LEAF_maps> period_str = ', period_str)
