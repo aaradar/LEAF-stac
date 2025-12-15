@@ -20,13 +20,17 @@ LS8_sensor     = 8
 LS9_sensor     = 9
 LS_sensor      = 19
 MAX_LS_CODE    = 20
+
 S2A_sensor     = 21
 S2B_sensor     = 22
+S2C_sensor     = 23
+MAX_S2_CODE    = 40
+
 S1B_sensor     = 41
 S1B_sensor     = 42
+MAX_S1_CODE    = 50
 
-
-MOD_sensor     = 50     # MODIS sensor
+MOD_sensor     = 80     # MODIS sensor
 HLSS30_sensor  = 100    # Harmonized Sentinel-2A/B
 HLSL30_sensor  = 101    # Harmonized Landsat-8/9
 HLS_sensor     = 102    # Harmonized Landsat and Sentinel-2 data
@@ -292,7 +296,7 @@ def get_SsrData_key(SsrCode, DataUnit):
       return 'L8_SR'
     elif SsrCode == LS9_sensor:
       return 'L9_SR'
-    elif SsrCode == S2A_sensor or SsrCode == S2B_sensor:
+    elif SsrCode == S2A_sensor or SsrCode == S2B_sensor or SsrCode == S2C_sensor:
       return 'S2_SR'
     elif SsrCode == LS7_sensor:
       return 'L7_SR'
@@ -301,7 +305,7 @@ def get_SsrData_key(SsrCode, DataUnit):
       return 'L8_TOA'
     elif SsrCode == LS9_sensor:
       return 'L9_TOA'
-    elif SsrCode == S2A_sensor or SsrCode == S2B_sensor:
+    elif SsrCode == S2A_sensor or SsrCode == S2B_sensor or SsrCode == S2C_sensor:
       return 'S2_TOA'
   else:
     print('<get_SsrData> Wrong sensor code or data unit provided!')
@@ -423,8 +427,7 @@ def apply_gain_offset(xrDS, SsrData, MaxRef, all_bands):
 
 
 ###################################################################################################
-# Description: This function applys default cloud and cloud-shadow masks to a given XArray dataset 
-#              object.
+# Description: This function masks out cloud and shadow pixels in a given XArray dataset object.
 #
 # Revision history:  2024-May-28  Lixin Sun  Initial creation
 #
@@ -442,7 +445,7 @@ def apply_gain_offset(xrDS, SsrData, MaxRef, all_bands):
 #   10      Cirrus
 #   11      Snow/Ice
 ###################################################################################################
-def apply_default_mask(xrDS, SsrData):
+def apply_pixel_masks(xrDS, SsrData):
   '''Returns a rescaling factor based on given sensor code and data unit.
  
      Args:        
@@ -452,11 +455,20 @@ def apply_default_mask(xrDS, SsrData):
 
   ssr_code = SsrData['SSR_CODE']
   
-  if ssr_code > MAX_LS_CODE and ssr_code < 25:  # For Sentinel-2 from AWS data catalog
+  if ssr_code > MAX_LS_CODE and ssr_code < MAX_S2_CODE:  # For Sentinel-2 from AWS data catalog
     scl = xrDS['scl']
     # The pixels with SCL = 0 must be masked out
     #return xrDS.where(((scl > 3) & (scl < 8)) | (scl == 11))   # Original statement used before Oct.07, 2025
-    return xrDS.where(((scl > 1) & (scl < 8)) | (scl > 9))      # New statement used after Oct.07, 2025 as this provide better results
+    masked_xrDS = xrDS.where(((scl > 1) & (scl < 8)) | (scl > 9))      # New statement used after Oct.07, 2025 as this provide better results
+
+    # Mask out shadow pixels using NDVI and NIR thresholding
+    # red = xrDS['red']
+    # nir = xrDS['nir08']
+    # ndvi = (nir - red) / (nir + red + 1e-6)
+    # shadow_mask = (ndvi > 0.3) & (nir < 10.0)
+    # masked_xrDS = masked_xrDS.where(~shadow_mask, drop=False)
+    
+    return masked_xrDS
  
   elif ssr_code in [HLSS30_sensor, HLSL30_sensor, HLS_sensor]:
     mask = xrDS['Fmask'].astype(np.uint8) & 0b00001110     #Seems there is no need to mask out aerosols

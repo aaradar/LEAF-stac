@@ -259,7 +259,7 @@ def preprocess_xrDS(xrDS_S2, xrDS_LS, MosaicParams):
   # Apply default pixel mask, rescaling gain and offset to each image in 'xrDS'
   #==========================================================================================================
   SsrData = MosaicParams['SsrData']
-  xrDS    = eoIM.apply_default_mask(xrDS, SsrData)
+  xrDS    = eoIM.apply_pixel_masks(xrDS, SsrData)
   xrDS    = eoIM.apply_gain_offset(xrDS, SsrData, 100, False)
 
   return xrDS, time_values

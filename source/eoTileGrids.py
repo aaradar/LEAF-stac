@@ -455,3 +455,37 @@ def get_subtile_names(inTileName, sub_level = 9):
   else:
     return None  
   
+
+
+
+##############################################################################################################
+# Description: This function slightly expands a square region to ensure complete coverage of the ROI
+#
+# Note:        The points in the provided polygon should be ordered as follows:
+#                   1--------4
+#                   |        ^
+#                   |        |
+#                   2------->3
+# 'tile65':{'type': 'Polygon', 'coordinates': [[[-83.004, 42.9647], [-84.7296, 35.366], [-75.9096, 33.6475], [-72.8716, 40.8803], [-83.004, 42.9647]]]},
+##############################################################################################################
+def expandSquare(Region, Delta):
+  '''
+    Args:
+      Region(Dictionary): A dictionary containing boundary coordinates of a tile or subtile;
+      Delta(float): The amount by which the region expanded.'''
+    
+  coord_list = Region['coordinates'][0]
+ 
+  delta  = Delta
+  
+  point1 = coord_list[0]
+  point2 = coord_list[1]
+  point3 = coord_list[2]
+  point4 = coord_list[3]
+
+  point1 = [point1[0] - delta, point1[1] + delta]
+  point2 = [point2[0] - delta, point2[1] + delta]
+  point3 = [point3[0] + delta, point3[1] - delta]
+  point4 = [point4[0] + delta, point4[1] + delta]
+
+  return [[point1, point2, point3, point4, point1]]

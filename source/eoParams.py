@@ -718,8 +718,8 @@ def form_time_windows(inParams):
 
 
 #############################################################################################################
-# Description: This function will do the following two things depending on if there are customized regions
-#              defined:
+# Description: This function performs one of two actions, depending on whether custom regions are defined.
+#              
 #              (1) When there is no customized regions defined: it converts the sptail regions defined in 
 #                  inParams['tile_names'] to customized regions and set the first tile as 'current_region';
 #              (2) When there is at least one customized regions already defined in inParams['regions'],
@@ -729,10 +729,11 @@ def form_time_windows(inParams):
 #
 #############################################################################################################
 def form_spatial_regions(inParams):
-  if not has_custom_region(inParams):   # There is no customized region, so use regular tile regions
+  if not has_custom_region(inParams):   # There is no custom region, so use regular tile regions
     inParams['regions'] = {}
-    for tile_name in inParams['tile_names']:      
+    for tile_name in inParams['tile_names']:
       if eoTG.valid_tile_name(tile_name):
+        
         inParams['regions'][tile_name] = eoTG.get_tile_polygon(tile_name)
     
     #return set_spatial_region(inParams, inParams['tile_names'][0])  

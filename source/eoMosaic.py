@@ -511,7 +511,7 @@ def get_base_Image(StacItems, MosaicParams, ChunkDict):
 
 
 #############################################################################################################
-# Description: This function returns reference bands for the blue and NIR bands.
+# Description: This function returns reference blue and NIR bands.
 #
 # Revision history:  2024-May-28  Lixin Sun  Initial creation
 #                    2024-Nov-26  Marjan Asgari Limiting the calculation of median to only the bands we want
@@ -524,28 +524,33 @@ def get_score_refers(ready_IC):
   #==========================================================================================================
   # Create median images only for selected data variables
   #==========================================================================================================
-  blu = ready_IC['blue'].median(dim='time',   skipna=True)
-  red = ready_IC['red'].median(dim='time',    skipna=True)
-  nir = ready_IC['nir08'].median(dim='time',  skipna=True)
-  #sw1 = ready_IC['swir22'].median(dim='time', skipna=True)
-  sw2 = ready_IC['swir22'].median(dim='time', skipna=True)
+  median_blu = ready_IC['blue'].median(dim='time',   skipna=True)
+  median_red = ready_IC['red'].median(dim='time',    skipna=True)
+  median_nir = ready_IC['nir08'].median(dim='time',  skipna=True)
+  median_sw2 = ready_IC['swir22'].median(dim='time', skipna=True)
 
   #==========================================================================================================
   # Calculate NDVI and estimate blue band reference from SWIR2 reflectance
   #==========================================================================================================
-  NDVI      = (nir - red)/(nir + red + 0.0001)  
-  model_blu = sw2*0.25
+  median_NDVI = (median_nir - median_red)/(median_nir + median_red + 0.0001)  
+  model_blu   = median_sw2*0.25
   
   #==========================================================================================================
-  # Correct the blue band values of median mosaic for the pixels with NDVI values larger than 0.3
+  # Correct the blue reference for vegetated pixels (median_nir < 2*median_blu or median_NDVI < 0.3)
   #========================================================================================================== 
-  condition = (nir < 2*blu) | (NDVI < 0.3)    # | (sw2 < blu)
-  blu       = blu.where(condition, other = model_blu)
-  #blu       = blu.where(condition, other = model_blu)
+  condition  = (median_nir < 2*median_blu) | (median_NDVI < 0.3)    # | (sw2 < blu)
+  median_blu = median_blu.where(condition, other = model_blu)  
+
+  median_nir = median_nir.copy()
+  # Dense vegetation: enforce NIR ≥ 40
+  median_nir = xr.where((median_NDVI > 0.4) & (median_nir < 40.0), 40.0, median_nir)
+
+  # Moderate vegetation: enforce NIR ≥ 30
+  median_nir = xr.where((median_NDVI > 0.1) & (median_NDVI <= 0.4) & (median_nir < 30.0), 30.0, median_nir)
+
+  del median_red, median_sw2, median_NDVI, model_blu, condition
   
-  del red, sw2, NDVI, model_blu, condition
-  
-  return blu, nir
+  return median_blu, median_nir
 
 
 
@@ -583,7 +588,7 @@ def image_score(i, T, ready_IC, midDate, SsrData, median_blu, median_nir, WinSiz
   # Calculatr time score according to sensor type
   #==========================================================================================================  
   ssr_code   = int(SsrData['SSR_CODE'])
-  is_S2_data = ssr_code in [eoIM.S2A_sensor, eoIM.S2B_sensor, eoIM.HLSS30_sensor]
+  is_S2_data = ssr_code in [eoIM.S2A_sensor, eoIM.S2B_sensor, eoIM.S2C_sensor, eoIM.HLSS30_sensor]
   
   STD = float(WinSize/6.0 + 1 if is_S2_data == True or ssr_code == eoIM.HLS_sensor else WinSize/6.0 + 3)
 
@@ -1052,7 +1057,7 @@ def preprocess_xrDS(xrDS_S2, xrDS_LS, MosaicParams):
   # Apply default pixel mask, rescaling gain and offset to each image in 'xrDS'
   #==========================================================================================================
   SsrData = MosaicParams['SsrData']
-  xrDS    = eoIM.apply_default_mask(xrDS, SsrData)
+  xrDS    = eoIM.apply_pixel_masks(xrDS, SsrData)
   xrDS    = eoIM.apply_gain_offset(xrDS, SsrData, 100, False)
 
   return xrDS, time_values
@@ -1564,8 +1569,7 @@ def create_mosaic_at_once_one_machine(BaseImg, unique_granules, stac_items, Mosa
 def one_mosaic(AllParams, Output=True):
   '''
     Args:
-      ProdParams(Dictionary): A dictionary containing all parameters related to composite image production;
-      CompParams(Dictionary): A dictionary containing all parameters related to used computing environment.
+      AllParams(Dictionary): A dictionary containing all parameters related to composite image production;      
       Output(Boolean): An integer indicating wheter to export resulting composite image.'''
   
   mosaic_start = time.time()   #Record the start time of the whole process
