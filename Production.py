@@ -66,26 +66,25 @@ vancouver_region = {
 
 
 CompParams = {
-  "number_workers" : 5,   #For S2 data, only use 10 rather than 20
-  "worker_threads": 1,
+  "number_workers" : 10,   #For S2 data, only use 10 rather than 20
   "debug"       : True,
   "entire_tile" : False,     #
   "nodes"       : 1,
-  "node_memory" : "100G",
+  "node_memory" : "50G",
   'chunk_size': {'x': 2048, 'y': 2048}
 }
 
   
 ProdParams = {
-    'sensor': 'S2_SR',       # A sensor type string (e.g., 'S2_SR', 'HLS_SR', 'HLSL30_SR', 'HLSS30_SR' or 'MOD_SR')
+    'sensor': 'HLS_SR',       # A sensor type string (e.g., 'S2_SR', 'HLS_SR', 'HLSL30_SR', 'HLSS30_SR' or 'MOD_SR')
     'unit': 2,                   # A data unit code (1 or 2 for TOA or surface reflectance)    
     'year': 2025,                # An integer representing image acquisition year
     'nbYears': -1,               # positive int for annual product, or negative int for monthly product
-    'months': [7],            # A list of integers represening one or multiple monthes     
+    'months': [5],            # A list of integers represening one or multiple monthes     
     'tile_names': ['tile55_422'], # A list of (sub-)tile names (defined using CCRS' tile griding system) 
     'prod_names': ['mosaic'],    #['LAI', 'fCOVER', 'fAPAR', 'Albedo'], 
-    'resolution':80,            # Exporting spatial resolution    
-    'out_folder': 'C:/Work_Data/S2_mosaic_tile55_422_2025_80m',  # the folder name for exporting
+    'resolution': 30,            # Exporting spatial resolution    
+    'out_folder': 'C:/Work_Data/HLS_mosaic_tile55_422_2025_temp',  # the folder name for exporting
     'out_datatype': 'int16',     # 'int8' or 'int16'
     'projection': 'EPSG:3979',
     'IncludeAngles': False,

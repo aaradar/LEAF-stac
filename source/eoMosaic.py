@@ -1,6 +1,24 @@
-import gc
-import gc
 import os
+import tempfile
+import platform
+
+if platform.system() == "Linux":    
+  os.environ['http_proxy']  = "http://webproxy.science.gc.ca:8888/"
+  os.environ['https_proxy'] = "http://webproxy.science.gc.ca:8888/"
+else:  
+  # ---------------- GDAL / Rasterio HTTP stability (Windows) ----------------
+  cookie_file = os.path.join(tempfile.gettempdir(), "gdal_cookies.txt")
+
+  os.environ["GDAL_HTTP_MAX_RETRY"]   = "10"
+  os.environ["GDAL_HTTP_RETRY_DELAY"] = "2"
+  os.environ["GDAL_HTTP_TIMEOUT"]     = "60"
+  os.environ["GDAL_HTTP_MULTIPLEX"]   = "NO"
+
+  os.environ["GDAL_DISABLE_READDIR_ON_OPEN"] = "YES"
+  os.environ["GDAL_HTTP_COOKIEJAR"]  = cookie_file
+  os.environ["GDAL_HTTP_COOKIEFILE"] = cookie_file
+
+import gc
 import sys
 import dask
 import sys
@@ -13,7 +31,6 @@ import shutil
 import logging
 import asyncio
 import odc.stac
-import platform
 import requests
 import warnings
 import functools
@@ -151,6 +168,9 @@ def get_View_angles(StacItem):
   return view_angles
 
 
+
+
+
 def display_meta_assets(stac_items, First):
   if First == True:    
     first_item = stac_items[0]
@@ -160,7 +180,7 @@ def display_meta_assets(stac_items, First):
       print(f"Asset key: {asset_key}, title: {asset.title}, href: {asset.href}")    
 
     print('<<<<<<< The meta data associated with an item >>>>>>>\n' )
-    print("ID:", first_item.id)
+    print("Scene ID:", first_item.id)
     print("Geometry:", first_item.geometry)
     print("Bounding Box:", first_item.bbox)
     print("Datetime:", first_item.datetime)
@@ -402,7 +422,7 @@ def ingest_Geo_Angles(StacItems):
 
 
 #############################################################################################################
-# Description: This function returns a base image that covers the entire spatial region od an interested area.
+# Description: This function returns a base image that covers the entire ROI.
 #
 # Revision history:  2024-May-24  Lixin Sun  Initial creation
 #                    2024-Jul-17  Lixin Sun  Modified so that only unique and filtered STAC items will be
@@ -429,59 +449,61 @@ def get_base_Image(StacItems, MosaicParams, ChunkDict):
   #==========================================================================================================
   # Prepare some required variables
   #==========================================================================================================
-  xy_bbox    = eoUs.get_region_bbox(Region, ProjStr)
+  xy_bbox   = eoUs.get_region_bbox(Region, ProjStr)
+  base_xrDS = None  # To store the dataset once it is loaded
+  max_tries = min(30, len(StacItems))
 
-  base_xrDS  = None  # To store the dataset once it is loaded
-  items = len(StacItems)
-  nb_tries = 20 if 20 < items else items
   #==========================================================================================================
   # Ensure the base image is a DASK backed xarray dataset
   #==========================================================================================================
-  base_image_is_read = False    
-  i = 0 
-  while not base_image_is_read and i < nb_tries:
-    try:
-      # If out_xrDS is not None, skip loading data again
-      if base_xrDS is not None:
-        break  # Data already loaded, break the loop
+  base_image_is_read = False      
+  used_item = None
 
+  i = 0 
+  while not base_image_is_read and i < max_tries:
+    try:  
       # Attempt to load the STAC item and process it
       load_bands = get_load_bands(StacItems[i], Bands, InclAngles)
-      with odc.stac.load([StacItems[i]],
+
+      ds_xr = odc.stac.load([StacItems[i]],
                         bands  = load_bands,
                         chunks = ChunkDict,
                         crs    = ProjStr, 
                         resolution = Scale, 
                         resampling = "nearest",
                         x = (xy_bbox[0], xy_bbox[2]),
-                        y = (xy_bbox[3], xy_bbox[1])) as ds_xr:
+                        y = (xy_bbox[3], xy_bbox[1]))
           
-        # Process the data once loaded successfully
-        base_xrDS = ds_xr.isel(time=0).astype(np.float32)
-        if base_xrDS is not None:
-          base_image_is_read = True  # Mark as successfully read
-        else:
-          i += 1
-          if i >= nb_tries:
-            break  # Exit the loop after reaching max retries
+      if ds_xr is None or not isinstance(ds_xr, xr.Dataset):
+        raise RuntimeError("odc.stac.load() returned invalid dataset")
+
+      if "time" not in ds_xr.dims or ds_xr.sizes["time"] == 0:
+        raise RuntimeError("Dataset has no valid time dimension")
+          
+      # Process the data once loaded successfully
+      base_xrDS = ds_xr.isel(time=0).astype(np.float32)
+      base_image_is_read = True
+      used_item = StacItems[i]
+      break    
 
     except Exception as e:
       i += 1
-      if i >= nb_tries:
-        break  # Exit the loop after reaching max retries
+      print(f"[Base image retry {i}/{max_tries}] Failed: {e}")
   
   if base_xrDS is None:
     raise ValueError("There is no data returned for the base image. If you are using a custom region or time, please adjust and expand them accordingly.")
 
-  ssr_str = str(MosaicParams['sensor']).lower()
+  #==========================================================================================================
+  # When sensor is "HLS_SR", create a "sensor" band filled with zeros
+  #==========================================================================================================
+  ssr_str = str(MosaicParams['sensor']).upper()
   if ssr_str == "HLS_SR": 
     base_xrDS['sensor'] = xr.DataArray(
-            data = dask.array.zeros((base_xrDS.sizes['y'], base_xrDS.sizes['x']), chunks=(ChunkDict['x'], ChunkDict['y']), dtype = np.float32),
+            data = dask.array.zeros((base_xrDS.sizes['y'], base_xrDS.sizes['x']), 
+                                    chunks=(ChunkDict['y'], ChunkDict['x']), 
+                                    dtype = np.float32),
             dims=['y', 'x'],
-            coords={
-                'y': base_xrDS['y'],
-                'x': base_xrDS['x'],
-            }
+            coords={'y': base_xrDS['y'], 'x': base_xrDS['x']}
     )
 
   #==========================================================================================================
@@ -495,8 +517,8 @@ def get_base_Image(StacItems, MosaicParams, ChunkDict):
   base_xrDS[eoIM.pix_date]  = base_xrDS['blue']
   base_xrDS[eoIM.pix_score] = base_xrDS['blue']
 
-  scene_id = str(StacItems[0].id).lower()
-  if InclAngles and ('s2a' in scene_id or 's2b' in scene_id):
+  scene_id = str(used_item.id).lower()
+  if InclAngles and ('s2a' in scene_id or 's2b' in scene_id or 's2c' in scene_id):
     for var in ['SZA', 'SAA', 'VZA', 'VAA']:
       base_xrDS[var] = base_xrDS['blue']
 
@@ -504,8 +526,9 @@ def get_base_Image(StacItems, MosaicParams, ChunkDict):
   # Mask out all the pixels in each variable of "base_img", so they will treated as gap/missing pixels
   # This step is very import if "combine_first" function is used to merge granule mosaic into based image. 
   #==========================================================================================================
+  #return base_xrDS.fillna(0)*0 + -10000.0
+  return xr.full_like(base_xrDS, -10000.0)
 
-  return base_xrDS.fillna(0)*0 + -10000.0
 
 
 
@@ -827,7 +850,8 @@ def load_STAC_with_retry(STAC_items, bands, resolution, chunk_size, crs, max_att
       print(f"<load_stac_with_retry> An error occurred: {e}")
       return None
         
-  return None  # all attempts failed
+  print(f"<load_stac_with_retry> All attempts failed!!")
+  return None
 
 
 
@@ -850,14 +874,14 @@ def load_STAC_items(STAC_items, Bands, chunk_size, ProjStr, Scale):
   """
 
   if len(STAC_items) < 1 or len(Bands) < 1:
-    print('<load_STAC_items> Invalid parameter was provided!')  
+    print('<load_STAC_items> Invalid input parameter was provided!')  
     return None
   
   print('<load_STAC_items> Bands to be loaded are:', Bands)
   xrDS = load_STAC_with_retry(STAC_items, Bands, Scale, chunk_size, ProjStr)  
 
-  print('<load_STAC_items> Complete calling load_STAC_with_retry function')
   if xrDS is None:
+    print('<load_STAC_items> xrDS is None!')  
     return xrDS  
 
   #==========================================================================================================
@@ -1006,14 +1030,18 @@ def preprocess_xrDS(xrDS_S2, xrDS_LS, MosaicParams):
       MosaicParams(Dictionary): A dictionary containing all the parameters required for generating a composite.
   """
   if xrDS_S2 is None and xrDS_LS is None:
+    print('<preprocess_xrDS> Both required inputs (xrDS_S2 and xrDS_LS) are None!')
     return None, None 
   
+  x_chunk = MosaicParams['chunk_size']['x']
+  y_chunk = MosaicParams['chunk_size']['y']
+
   if xrDS_S2 is not None and xrDS_LS is not None:    
     # When both HLS_S30 and HLS_L30 are available
     xrDS_S2[eoIM.pix_sensor] = xr.DataArray(data = dask.array.full((xrDS_S2.sizes['time'], xrDS_S2.sizes['y'], xrDS_S2.sizes['x']),
                                                                     eoIM.S2A_sensor,  # Value to fill the array with
                                                                     dtype=np.float32, 
-                                                                    chunks=(1, 2000, 2000)),
+                                                                    chunks=(1, x_chunk, y_chunk)),
                           dims   = ['time', 'y', 'x'],  # Dimensions should match those of existing variables in xrDS
                           coords = {'y': xrDS_S2['y'], 'x': xrDS_S2['x'], 'time' : xrDS_S2['time']}
                           )
@@ -1021,7 +1049,7 @@ def preprocess_xrDS(xrDS_S2, xrDS_LS, MosaicParams):
     xrDS_LS[eoIM.pix_sensor] = xr.DataArray(data = dask.array.full((xrDS_LS.sizes['time'], xrDS_LS.sizes['y'], xrDS_LS.sizes['x']),
                                                                     eoIM.LS8_sensor,  # Value to fill the array with
                                                                     dtype=np.float32, 
-                                                                    chunks=(1, 2000, 2000)),
+                                                                    chunks=(1, x_chunk, y_chunk)),
                           dims   = ['time', 'y', 'x'],  # Dimensions should match those of existing variables in xrDS
                           coords = {'y': xrDS_LS['y'], 'x': xrDS_LS['x'], 'time' : xrDS_LS['time']}
                           )
@@ -1227,6 +1255,7 @@ def get_granule_mosaic(Input_tuple):
   xrDS, time_values = preprocess_xrDS(xrDS_S2, xrDS_LS, MosaicParams)
   
   if xrDS is None:
+    print(f'<get_granule_mosaic> No valid image was loaded for {granule} granule:')
     return None
   
   #==========================================================================================================
@@ -1235,21 +1264,20 @@ def get_granule_mosaic(Input_tuple):
   attach_score_args = functools.partial(attach_score, 
     SsrData  = SsrData, 
     StartStr = StartStr,
-    EndStr   = EndStr
-  )
+    EndStr   = EndStr)
   
   my_chunk = {'x': ChunkDict['x'], 'y':  ChunkDict['y'], 'time': xrDS.sizes['time']}             
-  xrDS = xrDS.chunk(my_chunk).map_blocks(
-    attach_score_args, 
-    template = xrDS.chunk(my_chunk)
-  )
+  xrDS = xrDS.chunk(my_chunk).map_blocks(attach_score_args, template = xrDS.chunk(my_chunk))  
   
   #==========================================================================================================
   # Create a composite image based on compositing scores
   # Note: calling "fillna" function before invoking "argmax" function is very important!!!
   #==========================================================================================================
   xrDS = xrDS.fillna(-10000.0).chunk(my_chunk)
-
+  if eoIM.pix_sensor not in list(xrDS.data_vars):
+    print(f'<get_granule_mosaic> pix_sensor band is missing in xrDS for {granule} granule:')
+    return None 
+  
   def granule_mosaic_template(xrDS, inBands, IncAngles):
     "Every variable used in this function must be input as a parameter. Global variables cannot be used!"
     mosaic_template = {}
@@ -1305,6 +1333,10 @@ def get_granule_mosaic(Input_tuple):
   mosaic         = mosaic.where(mosaic[eoIM.pix_date] > 0)
   mosaic_aligned = mosaic.reindex_like(BaseImg).chunk(ChunkDict).fillna(-10000.0)
   #mosaic_aligned = mosaic.reindex_like(BaseImgRefGrid).chunk(ChunkDict).fillna(-10000.0)  
+
+  if eoIM.pix_sensor not in list(mosaic_aligned.data_vars):
+    print(f'<get_granule_mosaic> pix_sensor band is missing in mosaic_aligned for {granule} granule:')
+    return None 
 
   # ==========================================================================================
   # NEW PART — Align mosaic to the BaseImg reference grid (subregion only)
@@ -1486,23 +1518,23 @@ def create_mosaic_at_once_one_machine(BaseImg, unique_granules, stac_items, Mosa
     #========================================================================================================
     # Special settings for linux platform
     #========================================================================================================
-    if platform.system() == "Linux":    
-      os.environ['http_proxy'] = "http://webproxy.science.gc.ca:8888/"
-      os.environ['https_proxy'] = "http://webproxy.science.gc.ca:8888/"
+    # if platform.system() == "Linux":    
+    #   os.environ['http_proxy']  = "http://webproxy.science.gc.ca:8888/"
+    #   os.environ['https_proxy'] = "http://webproxy.science.gc.ca:8888/"
     
     #========================================================================================================
     # Special settings for HLS data
     #========================================================================================================
-    if MosaicParams["sensor"] in ['HLSS30_SR', 'HLSL30_SR', 'HLS_SR']:
-      os.environ['CPL_VSIL_CURL_USE_HEAD'] = "FALSE"
-      os.environ['GDAL_DISABLE_READDIR_ON_OPEN'] = "YES"
-      os.environ['GDAL_HTTP_COOKIEJAR'] = "/tmp/cookies.txt"
-      os.environ['GDAL_HTTP_COOKIEFILE'] = "/tmp/cookies.txt"
-    
+    # if MosaicParams["sensor"] in ['HLSS30_SR', 'HLSL30_SR', 'HLS_SR']:
+    #   os.environ['CPL_VSIL_CURL_USE_HEAD'] = "FALSE"
+    #   os.environ['GDAL_DISABLE_READDIR_ON_OPEN'] = "YES"
+    #   os.environ['GDAL_HTTP_COOKIEJAR']  = "/tmp/cookies.txt"
+    #   os.environ['GDAL_HTTP_COOKIEFILE'] = "/tmp/cookies.txt"
+      
     #========================================================================================================
     # Create DASK local clusters for computation
-    # Note: (1) always use ONR|E thread for each worker;
-    #       (2) always set a memory limit for each Dask owrker 
+    # Note: (1) always use ONE thread for each worker;
+    #       (2) always set a memory limit for each Dask worker 
     #========================================================================================================
     dask.config.set({
         'distributed.comm.retry.count': 5,
@@ -1525,10 +1557,7 @@ def create_mosaic_at_once_one_machine(BaseImg, unique_granules, stac_items, Mosa
 
     client = Client(cluster)
     #client.register_worker_callbacks(setup=disable_spill)
-    print(f'\n\n<<<<<<<<<< Dask dashboard is available {client.dashboard_link} >>>>>>>>>')  
-    
-    #data = (BaseImg, unique_granules[0], stac_items, MosaicParams)
-    #get_granule_mosaic(data)
+    print(f'\n\n<<<<<<<<<< Dask dashboard is available {client.dashboard_link} >>>>>>>>>')
 
     #========================================================================================================
     # Submit the jobs to the clusters to process them in a parallel mode 
@@ -1583,9 +1612,9 @@ def one_mosaic(AllParams, Output=True):
   #           data from AWS is used.
   #==========================================================================================================  
   stac_items = search_STAC_Catalog(AllParams, 100)  
-  print(f"\n<period_mosaic> A total of {len(stac_items):d} items were found.\n")
+  print(f"\n<one_mosaic> A total of {len(stac_items):d} items were found.\n")
 
-  #When in debugging mode, display metadata assets
+  #When in debugging mode, display metadata assets associated with the first item
   if AllParams["debug"]:
     display_meta_assets(stac_items, True)   
   
@@ -1593,13 +1622,13 @@ def one_mosaic(AllParams, Output=True):
   # Create a base image that fully spans ROI
   #==========================================================================================================
   base_img = get_base_Image(stac_items, AllParams, ChunkDict)
-  print('\n<period_mosaic> based mosaic image = ', base_img)
+  print('\n<one_mosaic> based mosaic image = ', base_img)
   
   #==========================================================================================================
   # Extract unique granule names and iterate over them to generate submosaic separately 
   #==========================================================================================================  
   unique_granules = get_unique_tile_names(stac_items)  #Get all unique tile names 
-  print('\n<period_mosaic> The number of unique granule tiles = %d'%(len(unique_granules)))  
+  print('\n<one_mosaic> The number of unique granule tiles = %d'%(len(unique_granules)))  
 
   if AllParams["debug"]:
     print('\n<<<<<< The unique granule tiles = ', unique_granules)  
@@ -1686,14 +1715,15 @@ def merge_granule_mosaics(mosaic, base_img, pix_score):
     base_img(XArray): A base image to hold the resulting composite for entire ROI;
     pix_score(String): The string name of pixel score layer. """
   
-  if mosaic is not None:
-    mask = mosaic[pix_score] > base_img[pix_score]
-    for var in base_img.data_vars:
-      base_img[var] = xr.where(mask, mosaic[var], base_img[var])
-    return base_img  # Return the updated base_img
+  if mosaic is None:
+    return base_img
   
-  return None  # If mosaic is None, return None
-
+  mask = mosaic[pix_score] > base_img[pix_score]
+  for var in base_img.data_vars:
+    base_img[var] = xr.where(mask, mosaic[var], base_img[var])
+  
+  return base_img  # Return the updated base_img
+  
 
 
 
@@ -1739,11 +1769,11 @@ def export_mosaic(inParams, inMosaic):
 
   #==========================================================================================================
   # Create individual sub-mosaic and combine it into base image based on score
-  #==========================================================================================================
+  #==========================================================================================================  
   spa_scale    = inParams['resolution']
   export_style = str(inParams['export_style']).lower()
-  #rio_mosaic   = rio_mosaic.compute()  
   ext_saved    = []
+  ass_bands    = [eoIM.pix_sensor, eoIM.pix_date, 'scl', 'Fmask'] 
   if 'sepa' in export_style:
     #out_bands = rio_mosaic.data_vars if spa_scale > 15 else ['blue', 'green', 'red', 'nir08', 'score', 'date']
     out_bands = rio_mosaic.data_vars
@@ -1754,11 +1784,20 @@ def export_mosaic(inParams, inMosaic):
     
     out_bands = list(set(band for band in out_bands))
     for band in out_bands:
-      out_img     = rio_mosaic[band]
-      if band == eoIM.pix_sensor:
-        out_img = out_img.where(out_img >= 0, 0) / 100
+      out_img = rio_mosaic[band]
+      out_img = out_img.where(out_img > 0, 0)   # Force negative values to ZERO
+
+      # Specially deal with associated bands
+      if band in ass_bands:
+        out_img = out_img / 100   # For associated bands, restore their original values (do not multiply 100)
+        if band == eoIM.pix_sensor or band == 'scl' or band == 'Fmask':
+          out_img = out_img.astype(np.uint8)   
+        else:
+          out_img = out_img.astype(np.int16)  
+
       filename    = f"{filePrefix}_{band}_{spa_scale}m.tif"
       output_path = os.path.join(dir_path, filename)
+
       out_img.rio.to_raster(output_path)
 
   else:

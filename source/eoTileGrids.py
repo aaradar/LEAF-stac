@@ -416,6 +416,7 @@ def get_tile_polygon(inTileName):
     return None  
   
 
+
 #############################################################################################################
 # Description: This function returns a polygon corresponding to a given tile name
 #
@@ -474,24 +475,21 @@ def expandSquare(Region, Delta):
       Region(Dictionary): A dictionary containing boundary coordinates of a tile or subtile;
       Delta(float): The amount by which the region expanded.'''
     
-  coord_list = Region['coordinates'][0]
-  nPts = len(coord_list)
-  if nPts < 4 or nPts > 5:
+  coords = Region['coordinates'][0]
+
+  if len(coords) not in (4, 5):
     print('<expandSquare> Invalid number of points in tile polygon definition!!')
-    return {}
+    return Region
   
-  delta  = abs(Delta)
+  d = abs(Delta)
   
-  point1 = coord_list[0]
-  point2 = coord_list[1]
-  point3 = coord_list[2]
-  point4 = coord_list[3]
+  p1, p2, p3, p4 = coords[:4]  
 
-  point1 = [point1[0] - delta, point1[1] + delta]
-  point2 = [point2[0] - delta, point2[1] - delta]
-  point3 = [point3[0] + delta, point3[1] - delta]
-  point4 = [point4[0] + delta, point4[1] + delta]
+  p1 = [p1[0] - d, p1[1] + d]
+  p2 = [p2[0] - d, p2[1] - d]
+  p3 = [p3[0] + d, p3[1] - d]
+  p4 = [p4[0] + d, p4[1] + d]
 
-  Region['coordinates'] = [[point1, point2, point3, point4, point1]]
+  Region['coordinates'] = [[p1, p2, p3, p4, p1]]
 
   return Region
