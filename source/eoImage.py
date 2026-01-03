@@ -676,7 +676,7 @@ def load_TIF_files_to_xr(ImgPath:str, KeyStrings:list[str], MonthStr:str = ''):
   
   band_names = cube.coords['band'].values.tolist()
   print(band_names)
-  
+
   return cube
 
 
@@ -854,6 +854,25 @@ def rescale_spec_bands(inImg, selected_vars, gain, offset):
       inImg[var] = inImg[var]*gain + offset
 
   return inImg
+
+
+#############################################################################################################
+# Description: This function creates a land mask based on given band images.
+#  
+# Revision history:  2025-Dec-31  Lixin Sun  Initial creation
+#
+#############################################################################################################
+def land_mask(blu, red, nir, sw1):
+  '''
+    Args:
+      blu, red, nir, sw1: 2D Numpy arrays representing the blue, red, near-infrared, and shortwave-infrared band images.
+  '''
+  
+  land_cond1 = (sw1 > 3.0) & (sw1 > red)                       # Casted shadow and boundary condition
+  land_cond2 = (sw1 > 15.0)                                    # Bright land condition
+  land_cond3 = ((nir > 15.0) & ((nir >= 2*blu) | (sw1 > red))) # regular land condition
+
+  return (land_cond1 | land_cond2 | land_cond3)
 
 
 

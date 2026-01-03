@@ -541,37 +541,37 @@ def get_base_Image(StacItems, MosaicParams, ChunkDict):
 #                                 skiping NA in median calculation.
 #                    2024-Nov-26  Marjan Asgari Limiting the calculation of median to only the bands we want
 #                                 skiping NA in median calculation.
+#                    2025-Dec-30  Lixin Sun  Adjusted the strategy for raising NIR reference
 #############################################################################################################
 def get_score_refers(ready_IC):
   
   #==========================================================================================================
   # Create median images only for selected data variables
   #==========================================================================================================
-  median_blu = ready_IC['blue'].median(dim='time',   skipna=True)
-  median_red = ready_IC['red'].median(dim='time',    skipna=True)
-  median_nir = ready_IC['nir08'].median(dim='time',  skipna=True)
-  median_sw2 = ready_IC['swir22'].median(dim='time', skipna=True)
+  #ready_IC = ready_IC.chunk({'time': -1})     # does not work
+  #median = ready_IC[['blue', 'red', 'nir08', 'swir16', 'swir22']].median(dim='time', skipna=True)  # does not work
 
-  #==========================================================================================================
-  # Calculate NDVI and estimate blue band reference from SWIR2 reflectance
-  #==========================================================================================================
-  median_NDVI = (median_nir - median_red)/(median_nir + median_red + 0.0001)  
-  model_blu   = median_sw2*0.25
+  median_blu = ready_IC['blue'].median(dim='time', skipna=True)
+  median_red = ready_IC['red'].median(dim='time', skipna=True)
+  median_nir = ready_IC['nir08'].median(dim='time', skipna=True)
+  median_sw1 = ready_IC['swir16'].median(dim='time', skipna=True)
+  median_sw2 = ready_IC['swir22'].median(dim='time', skipna=True)
   
   #==========================================================================================================
-  # Correct the blue reference for vegetated pixels (median_nir < 2*median_blu or median_NDVI < 0.3)
+  # Correct the blue reference for vegetated pixels (median_nir >= 2*median_blu and median_NDVI >= 0.3)
   #========================================================================================================== 
-  condition  = (median_nir < 2*median_blu) | (median_NDVI < 0.3)    # | (sw2 < blu)
-  median_blu = median_blu.where(condition, other = model_blu)  
+  median_NDVI = (median_nir - median_red)/(median_nir + median_red + 0.0001)  
+  model_blu   = median_sw2*0.25  
+  
+  land_pix    = eoIM.land_mask(median_blu, median_red, median_nir, median_sw1)
 
-  median_nir = median_nir.copy()
-  # Dense vegetation: enforce NIR ≥ 40
-  median_nir = xr.where((median_NDVI > 0.4) & (median_nir < 40.0), 40.0, median_nir)
+  veg_cond = (land_pix & (median_NDVI >= 0.3))
 
-  # Moderate vegetation: enforce NIR ≥ 30
-  median_nir = xr.where((median_NDVI > 0.1) & (median_NDVI <= 0.4) & (median_nir < 30.0), 30.0, median_nir)
-
-  del median_red, median_sw2, median_NDVI, model_blu, condition
+  #==========================================================================================================
+  # Modify the blue and NIR reference values for some land pixels 
+  #==========================================================================================================   
+  median_blu = xr.where(veg_cond, model_blu, median_blu)  
+  median_nir = xr.where(land_pix, median_nir+10.0, median_nir)  
   
   return median_blu, median_nir
 
@@ -587,9 +587,6 @@ def get_score_refers(ready_IC):
 #                                                module."" With dask distributed we cannot use other 
 #                                                parallelization techniques.
 #############################################################################################################
-#==========================================================================================================
-# Define an internal function that can calculate time and spectral scores for each image in 'ready_IC'
-#==========================================================================================================
 def image_score(i, T, ready_IC, midDate, SsrData, median_blu, median_nir, WinSize):
   """ 
   Returns a score band for a specified image in a xarray Dataset object.
@@ -621,24 +618,12 @@ def image_score(i, T, ready_IC, midDate, SsrData, median_blu, median_nir, WinSiz
   
   time_score = 1.0/math.exp(0.5 * pow(date_diff/STD, 2))
 
-  #==========================================================================================================
-  # Extract some band images required for calculating spectral and cloud coverage scores
-  #==========================================================================================================
-  img = ready_IC.isel(time=i)
-  
-  max_SV  = xr.apply_ufunc(np.maximum, img['blue'], img['green'], dask='allowed')
-  max_SW  = xr.apply_ufunc(np.maximum, img['swir16'], img['swir22'], dask='allowed')
-  max_IR  = xr.apply_ufunc(np.maximum, img['nir08'], max_SW, dask='allowed')
-  STD_blu = img['blue'].where(img['blue'] > 0.01, 0.01)
-  
   #==================================================================================================
   # Calculate cloud coverage score
   #==================================================================================================
-  CC_key = ImgDate.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-  CC_score = 1.0 - float(ready_IC.attrs["item_CC"][CC_key])/100.0
-
-  #print(f'cloud cover score: {CC_score}')
-  #print(ready_IC.attrs["item_CC"])
+  CC_key   = ImgDate.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+  CC       = float(ready_IC.attrs.get("item_CC", {}).get(CC_key, 100.0))
+  CC_score = 1.0 - CC/100.0
 
   # max_spec = xr.apply_ufunc(np.maximum, max_SV, max_IR, dask='allowed')
 
@@ -649,33 +634,31 @@ def image_score(i, T, ready_IC, midDate, SsrData, median_blu, median_nir, WinSiz
   # CC_score = valid_pixes/total_pixes 
   
   #==================================================================================================
-  # Calculate scores assuming all the pixels are land
-  #==================================================================================================
-  abs_blu_pen = xr.apply_ufunc(np.abs, img['blue'] - median_blu, dask='allowed')
-  blu_pen     = xr.apply_ufunc(np.exp, abs_blu_pen, dask='allowed')
+  # Calculate haze and shadow penalties using blue and NIR bands, respectively
+  #==================================================================================================  
+  img = ready_IC.isel(time=i)
+  blu = img['blue']
+  nir = img['nir08']  
 
-  nir_pen     = xr.apply_ufunc(np.abs, img['nir08']- median_nir, dask='allowed') 
-  #nir_pen     = median_nir - img['nir08']
-  #nir_pen     = nir_pen.where(nir_pen > 0, 0)
+  blu_pen = np.exp(abs(blu - median_blu).clip(max=12.0))
+  nir_pen = abs(nir - median_nir) 
   
   #==================================================================================================
-  # Calculate scores for non-vegetated surfaces
+  # Calculate spectral scores for all pixels
   #==================================================================================================
-  nonveg_score = (median_blu+median_nir)/(blu_pen + nir_pen)
+  used_blu     = blu.where(blu > 0.01, 0.01)
+  nonveg_score = (median_blu + median_nir)/(blu_pen + nir_pen)
 
-  spec_score = xr.where(median_nir > 2*median_blu, img['nir08']/(STD_blu + blu_pen + nir_pen), nonveg_score)
-  #spec_score = land_score.where((max_SV < max_IR) | (max_SW > 3.0), water_score)
+  spec_score = xr.where(median_nir > 2*median_blu, nir/(used_blu + blu_pen + nir_pen), nonveg_score)
   spec_score = spec_score / (spec_score + 1) 
   
-  del nir_pen, blu_pen, abs_blu_pen, max_IR, max_SW, max_SV, STD_blu, img
+  #del nir_pen, blu_pen, abs_blu_pen, max_IR, max_SW, max_SV, STD_blu, img
   
   #==================================================================================================
   # Determine the scoring weights based on the length of compositing window
   #==================================================================================================
-  time_w = 0.4
+  time_w = 0.4 if WinSize < 32 else 0.5
   CC_w   = 0.9
-  if WinSize > 31:
-    time_w = 0.5
 
   return i, spec_score + time_w*time_score + CC_w*CC_score
 
@@ -697,7 +680,7 @@ def attach_score(ready_IC, SsrData, StartStr, EndStr):
        EndStr(string): A string representing the end date of a compositing period.'''  
 
   #==========================================================================================================
-  # Create reference images for blue and NIR bands
+  # Create reference images and time info
   #==========================================================================================================
   median_blu, median_nir = get_score_refers(ready_IC)
   midDate = datetime.strptime(eoUs.period_centre(StartStr, EndStr), "%Y-%m-%d")
@@ -705,16 +688,15 @@ def attach_score(ready_IC, SsrData, StartStr, EndStr):
   stop    = datetime.strptime(EndStr, "%Y-%m-%d")
   WinSize = (stop - start).days
 
+  time_vals = list(ready_IC.time.values)
   #==========================================================================================================
   # Parallelize the process of score calculations for every image in 'ready_IC'
-  #==========================================================================================================
-  time_vals = list(ready_IC.time.values)
-  
+  #==========================================================================================================  
   for i, T in enumerate(time_vals):    
     i, score = image_score(i, T, ready_IC, midDate, SsrData, median_blu, median_nir, WinSize)
     ready_IC[eoIM.pix_score][i, :,:] = score
 
-  del median_blu, median_nir
+  #del median_blu, median_nir
 
   return ready_IC
 
@@ -1020,13 +1002,13 @@ def load_STAC_10m_items(STAC_items, Bands_20m, chunk_size, ProjStr):
 #              and pixel date layers, and applying default pixel masks and scaling factors (gain and offset). 
 # 
 # Revision history:  2025-Jan-17  Lixin Sun  Initial creation
-#
+#                    2026-Jan-02  Lixin Sun  Modified to ensure 'pix_sensor' layer is always attached to xrDS
 ############################################################################################################# 
 def preprocess_xrDS(xrDS_S2, xrDS_LS, MosaicParams):
   """
     Args:
       xrDS_S2(XArray): A Xarray object Storing HLS S2 images;
-      xrDS_S2(XArray): A Xarray object Storing HLS LS images;
+      xrDS_LS(XArray): A Xarray object Storing HLS LS images;
       MosaicParams(Dictionary): A dictionary containing all the parameters required for generating a composite.
   """
   if xrDS_S2 is None and xrDS_LS is None:
@@ -1035,26 +1017,27 @@ def preprocess_xrDS(xrDS_S2, xrDS_LS, MosaicParams):
   
   x_chunk = MosaicParams['chunk_size']['x']
   y_chunk = MosaicParams['chunk_size']['y']
+  
+  def attach_pix_sensor(xrDS, sensor_code, x_chunk, y_chunk):
+    xrDS[eoIM.pix_sensor] = xr.DataArray(
+        data=dask.array.full(
+            (xrDS.sizes["time"], xrDS.sizes["y"], xrDS.sizes["x"]),
+            sensor_code,
+            dtype=np.float32,
+            chunks=(1, y_chunk, x_chunk),
+        ),
+        dims=["time", "y", "x"],
+        coords={"time": xrDS.time, "y": xrDS.y, "x": xrDS.x},
+    )
+
+    return xrDS 
 
   if xrDS_S2 is not None and xrDS_LS is not None:    
-    # When both HLS_S30 and HLS_L30 are available
-    xrDS_S2[eoIM.pix_sensor] = xr.DataArray(data = dask.array.full((xrDS_S2.sizes['time'], xrDS_S2.sizes['y'], xrDS_S2.sizes['x']),
-                                                                    eoIM.S2A_sensor,  # Value to fill the array with
-                                                                    dtype=np.float32, 
-                                                                    chunks=(1, x_chunk, y_chunk)),
-                          dims   = ['time', 'y', 'x'],  # Dimensions should match those of existing variables in xrDS
-                          coords = {'y': xrDS_S2['y'], 'x': xrDS_S2['x'], 'time' : xrDS_S2['time']}
-                          )
-    
-    xrDS_LS[eoIM.pix_sensor] = xr.DataArray(data = dask.array.full((xrDS_LS.sizes['time'], xrDS_LS.sizes['y'], xrDS_LS.sizes['x']),
-                                                                    eoIM.LS8_sensor,  # Value to fill the array with
-                                                                    dtype=np.float32, 
-                                                                    chunks=(1, x_chunk, y_chunk)),
-                          dims   = ['time', 'y', 'x'],  # Dimensions should match those of existing variables in xrDS
-                          coords = {'y': xrDS_LS['y'], 'x': xrDS_LS['x'], 'time' : xrDS_LS['time']}
-                          )
-    
+    xrDS_S2 = attach_pix_sensor(xrDS_S2, eoIM.S2A_sensor, x_chunk, y_chunk)
+    xrDS_LS = attach_pix_sensor(xrDS_LS, eoIM.LS8_sensor, x_chunk, y_chunk)
+
     #Concatenate S2 and LS data into the same XAarray object
+    xrDS_LS, xrDS_S2 = xr.align(xrDS_LS, xrDS_S2, join="outer")  # Align two xrDS objects to have the same spatial extent and resolution
     xrDS = xr.concat([xrDS_LS, xrDS_S2], dim="time").sortby("time")
 
     # Merge two 'item_CC' dictionaries (cloud cover for each item) into one dictionary
@@ -1063,12 +1046,11 @@ def preprocess_xrDS(xrDS_S2, xrDS_LS, MosaicParams):
     
     xrDS.attrs["item_CC"] = S2_item_CC | LS_item_CC
    
-  elif xrDS_S2 is not None:
-    # When only HLS_S30 data is available
-    xrDS = xrDS_S2
-  elif xrDS_LS is not None:
-    # When only HLS_L30 data is available
-    xrDS = xrDS_LS
+  elif xrDS_S2 is not None:    # When only HLS_S30 data is available
+    xrDS = attach_pix_sensor(xrDS_S2, eoIM.S2A_sensor, x_chunk, y_chunk)
+
+  elif xrDS_LS is not None:    # When only HLS_L30 data is available
+    xrDS = attach_pix_sensor(xrDS_LS, eoIM.LS8_sensor, x_chunk, y_chunk)
 
   #==========================================================================================================
   # Attach three layers, an empty 'score', acquisition DOY and 'time_index', to eath item/image in "xrDS" 
