@@ -2,7 +2,9 @@ import os
 import tempfile
 import platform
 
+
 if platform.system() == "Linux":    
+  # ---------------- GDAL / Rasterio HTTP stability (Linux) ----------------
   os.environ['http_proxy']  = "http://webproxy.science.gc.ca:8888/"
   os.environ['https_proxy'] = "http://webproxy.science.gc.ca:8888/"
 else:  
@@ -235,12 +237,16 @@ def search_STAC_Catalog(inParams, MaxImgs):
                                     datetime    = str(Criteria['timeframe']),
                                     query       = Criteria['filters'],
                                     limit       = MaxImgs)
+      
       # Get the items from the catalog
-      items = stac_catalog.items()
-      try:
-        stac_items += items
-      except: 
-        raise ValueError("There is no list of STAC items found for your query. If you are using a custom region or time, please adjust and expand them accordingly.")
+      items = list(stac_catalog.items())
+      print(f"<search_STAC_Catalog> Number of items found in collection {coll}: {len(items)}")
+
+      if not items:
+        raise ValueError("No STAC items found. Adjust region, time range, or filters.")
+
+      stac_items.extend(items)      
+      
   else:
     stac_catalog = catalog.search(collections = Criteria['collection'], 
                                   intersects  = Region,                           
@@ -1037,8 +1043,8 @@ def preprocess_xrDS(xrDS_S2, xrDS_LS, MosaicParams):
     xrDS_LS = attach_pix_sensor(xrDS_LS, eoIM.LS8_sensor, x_chunk, y_chunk)
 
     #Concatenate S2 and LS data into the same XAarray object
-    xrDS_LS, xrDS_S2 = xr.align(xrDS_LS, xrDS_S2, join="outer")  # Align two xrDS objects to have the same spatial extent and resolution
-    xrDS = xr.concat([xrDS_LS, xrDS_S2], dim="time").sortby("time")
+    #xrDS_LS, xrDS_S2 = xr.align(xrDS_LS, xrDS_S2, join="outer")  # Did not work well
+    xrDS = xr.concat([xrDS_LS, xrDS_S2], dim="time", join="outer").sortby("time")
 
     # Merge two 'item_CC' dictionaries (cloud cover for each item) into one dictionary
     S2_item_CC = xrDS_S2.attrs["item_CC"]
@@ -1495,24 +1501,8 @@ def create_mosaic_at_once_one_machine(BaseImg, unique_granules, stac_items, Mosa
     # these should be imported here due to "ValueError: signal only works in main thread of the main interpreter"
     from dask.distributed import Client
     from dask.distributed import LocalCluster
-    from dask import config
+    from dask import config    
     
-    #========================================================================================================
-    # Special settings for linux platform
-    #========================================================================================================
-    # if platform.system() == "Linux":    
-    #   os.environ['http_proxy']  = "http://webproxy.science.gc.ca:8888/"
-    #   os.environ['https_proxy'] = "http://webproxy.science.gc.ca:8888/"
-    
-    #========================================================================================================
-    # Special settings for HLS data
-    #========================================================================================================
-    # if MosaicParams["sensor"] in ['HLSS30_SR', 'HLSL30_SR', 'HLS_SR']:
-    #   os.environ['CPL_VSIL_CURL_USE_HEAD'] = "FALSE"
-    #   os.environ['GDAL_DISABLE_READDIR_ON_OPEN'] = "YES"
-    #   os.environ['GDAL_HTTP_COOKIEJAR']  = "/tmp/cookies.txt"
-    #   os.environ['GDAL_HTTP_COOKIEFILE'] = "/tmp/cookies.txt"
-      
     #========================================================================================================
     # Create DASK local clusters for computation
     # Note: (1) always use ONE thread for each worker;
@@ -1562,9 +1552,6 @@ def create_mosaic_at_once_one_machine(BaseImg, unique_granules, stac_items, Mosa
     granule_mosaics      = [client.submit(get_granule_mosaic, data) for data in granule_mosaics_data]
     
     return granule_mosaics, client, cluster, unique_name
-
-
-
 
 
 
@@ -1664,20 +1651,18 @@ def one_mosaic(AllParams, Output=True):
   dask_directory = os.path.join(Path(AllParams["out_folder"]), f"dask_spill_{unique_name}")
 
   if os.path.exists(dask_out_file):
-      os.remove(dask_out_file)
-      print(f"File '{dask_out_file}' has been deleted.")
+    os.remove(dask_out_file)
+    print(f"File '{dask_out_file}' has been deleted.")
   else:
-      print(f"File '{dask_out_file}' does not exist.")
+    print(f"File '{dask_out_file}' does not exist.")
 
   if os.path.exists(dask_directory):
-      shutil.rmtree(dask_directory)
-      print(f"Directory '{dask_directory}' and its contents have been deleted.")
+    shutil.rmtree(dask_directory)
+    print(f"Directory '{dask_directory}' and its contents have been deleted.")
   else:
-      print(f"Directory '{dask_directory}' does not exist.")
+    print(f"Directory '{dask_directory}' does not exist.")
   
   return mosaic
-
-
 
 
 
@@ -1794,18 +1779,18 @@ def export_mosaic(inParams, inMosaic):
   #return ext_saved, period_str
 
 
-def get_slurm_node_cpu_cores():
-  result = subprocess.check_output(f"scontrol show job {os.getenv('SLURM_JOB_ID')}", shell=True).decode()
-  for line in result.splitlines():
-      if 'TresPerTask' in line:
-          tres_per_task = line.split("=")[1]
-          if 'cpu:' in tres_per_task:
-              cpu_count = tres_per_task.split('cpu:')[1]
-              try:
-                  cpu_count = int(cpu_count)
-                  return cpu_count
-              except ValueError:
-                  return 1
-          else:
-              return 1
+# def get_slurm_node_cpu_cores():
+#   result = subprocess.check_output(f"scontrol show job {os.getenv('SLURM_JOB_ID')}", shell=True).decode()
+#   for line in result.splitlines():
+#       if 'TresPerTask' in line:
+#           tres_per_task = line.split("=")[1]
+#           if 'cpu:' in tres_per_task:
+#               cpu_count = tres_per_task.split('cpu:')[1]
+#               try:
+#                   cpu_count = int(cpu_count)
+#                   return cpu_count
+#               except ValueError:
+#                   return 1
+#           else:
+#               return 1
           

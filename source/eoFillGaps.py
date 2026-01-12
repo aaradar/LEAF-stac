@@ -304,24 +304,48 @@ def save_filled_image(FilledImg, Profile, SavePath):
 
 
 
-def fill_gaps(DataPath, TargetMonth, PreviousMonth, NextMonth, MaskPath):
+def fill_gaps(DataPath, TargetMonth, ReferMonth, nBands, TileStr, SaveMask=False):
   """
     Inputs:
       DataPath(string): A string containing the path to a given data directory;
       TargetMonth(string): A string specifying the target month for gap filling;
-      PreviousMonth(string): A string specifying the month before the target month;
-      NextMonth(string): A string specifying the month after the target month.
+      ReferMonth(string): A string specifying the reference month for gap filling;
+      nBands(int): An integer specifying the number of bands in the image;
+      SaveMask(Boolean): A boolean indicating whether to save the mask file.
   """
   #================================================================================================
-  # Load target month image and its valid mask
+  # Determine key band strings based on number of bands
   #================================================================================================
-  KeyStrings = ['blue_', 'green_', 'red_', 'edge1_', 'edge2_', 'edge3_', 'nir08_', 'swir16_', 'swir22_']
-  taget_img, taget_mask, taget_profile = eoImg.load_TIF_files_to_npa(DataPath, KeyStrings, TargetMonth)   #, 0, MaskPath)
-  refer_img, refer_mask, refer_profile = eoImg.load_TIF_files_to_npa(DataPath, KeyStrings, NextMonth)
+  if nBands == 6:
+    KeyStrings = ['blue_', 'green_', 'red_', 'nir08_', 'swir16_', 'swir22_']
+  elif nBands > 6 and nBands <= 9:
+    KeyStrings = ['blue_', 'green_', 'red_', 'edge1_', 'edge2_', 'edge3_', 'nir08_', 'swir16_', 'swir22_']
+  else:
+    print("<fill_gaps> Unsupported number of bands!")
+    return
+  
+  #================================================================================================
+  # Load target month image and its valid mask
+  #================================================================================================  
+  taget_img, taget_mask, taget_profile = eoImg.load_TIF_files_to_npa(DataPath, KeyStrings, TargetMonth, TileStr)
+  refer_img, refer_mask, refer_profile = eoImg.load_TIF_files_to_npa(DataPath, KeyStrings, ReferMonth, TileStr)
 
   if taget_img is None or taget_mask is None:
     print("<fill_gaps> Failed to load target month image or mask.")
     return  
+  
+  if SaveMask:
+    target_mask_path = DataPath + '\\' + TargetMonth + '_mask.tif'
+    refer_mask_path  = DataPath + '\\' + ReferMonth + '_mask.tif'
+    mask_profile     = taget_profile.copy()
+    mask_profile.update(dtype=rasterio.uint8, count=1, nodata=None)
+
+    eoImg.save_mask_to_tif(taget_mask, mask_profile, target_mask_path)
+    eoImg.save_mask_to_tif(refer_mask, mask_profile, refer_mask_path)
+
+  #================================================================================================
+  # Rescale the SR values from integer to float
+  #================================================================================================
   taget_img = taget_img * 0.01
   refer_img = refer_img * 0.01
   
@@ -347,5 +371,5 @@ def fill_gaps(DataPath, TargetMonth, PreviousMonth, NextMonth, MaskPath):
 
 
 
-fill_gaps('C:\\Work_Data\\S2_mosaic_vancouver2020_20m_for_testing_gap_filling', 'Jun', 'May', 'Jul', 
-          'C:\\Work_Data\\S2_mosaic_vancouver2020_20m_for_testing_gap_filling\\Jun_mask.tif')
+fill_gaps('E:\HLS_mosaics_2025\HLS_mosaic_tile42_2025_30m', 'Jun', 'Jul', 6, 'tile42_422',
+          'E:\HLS_mosaics_2025\HLS_mosaic_tile42_2025_30m\\Jun_Jul_mask.tif')

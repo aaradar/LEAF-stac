@@ -689,18 +689,18 @@ def load_TIF_files_to_xr(ImgPath:str, KeyStrings:list[str], MonthStr:str = ''):
 # Revision history:  2025-Non-20  Lixin Sun  Initial creation
 #
 #############################################################################################################
-def load_TIF_files_to_npa(ImgPath, KeyStrings, MonthStr = '', NoVal = 0, SaveMaskPath=None):
+def load_TIF_files_to_npa(ImgPath, KeyStrings, MonthStr, TileStr, SaveMaskPath=None):
   '''
     Args:
       ImgPath(string): A string containing the path to a given directory;
-      KeyStrings(List): A list of key strings for selecting a subset of GeoTiff files (files must contain
-                        one of the key strings in their filenames);
+      KeyStrings(List): A list of KEY band names to be loaded;
       MonthStr(string): An optional string for filtering monthly data;
-      NoVal(float): The no-data value used in the GeoTiff files.'''  
+      TileStr(string): An optional string for filtering tile-specific data;
+      SaveMaskPath(string): An optional path to save the mask GeoTIFF file.'''  
   
   if not os.path.isdir(ImgPath):
-    print("<read_multiple_geotiffs> The given directory does not exist!")
-    return None
+    print("<load_TIF_files_to_npa> The given directory does not exist!")
+    return None, None, None
   
   #================================================================================================  
   # Get all .tif files under the given directory
@@ -708,24 +708,39 @@ def load_TIF_files_to_npa(ImgPath, KeyStrings, MonthStr = '', NoVal = 0, SaveMas
   all_files = glob.glob(os.path.join(ImgPath, "*.tif"))
 
   #================================================================================================  
-  # Filter: keep only files that contain any of the key strings
+  # Filter out the files that do not contain any of the key band names
   #================================================================================================  
+  if len(TileStr) > 0:
+    tile_str = TileStr.lower()
+    filtered_files = [f for f in all_files if tile_str in os.path.basename(f).lower()]
+
   if len(MonthStr) > 0:
-    all_files = [f for f in all_files if MonthStr in os.path.basename(f)]
+    month_str = MonthStr.lower()
+    filtered_files = [f for f in filtered_files if month_str in os.path.basename(f).lower()]
   
   if len(KeyStrings) > 0:
-    selected_files = [f for f in all_files if any(k in f for k in KeyStrings)]
+    spec_files = [f for f in filtered_files if any(k in f for k in KeyStrings)]
     #selected_files = [f for f in all_files if any(key in os.path.basename(f) for key in KeyStrings)]
   
-  if not selected_files or len(selected_files) < 1:
-    print("<read_multiple_geotiffs> No matching GeoTIFF files found.")
-    return None
+  if not spec_files or len(spec_files) != len(KeyStrings):
+    print("<load_TIF_files_to_npa> Invalid number of matched GeoTIFF files found.")
+    return None, None, None
   
+  #================================================================================================  
+  # Get corresponding 'date' image filename
+  #================================================================================================  
+  date_files = [f for f in filtered_files if '_date_' in os.path.basename(f).lower()]
+  if len(date_files) != 1:
+    print("<load_TIF_files_to_npa> Exactly one date image file must be selected.")
+    return None, None, None
+ 
+  date_file = date_files[0]
+
   #================================================================================================  
   # Sort selected files based on their order in 'KeyStrings'
   #================================================================================================  
   #selected_files.sort()
-  sorted_files = [file for key in KeyStrings for file in selected_files if key in os.path.basename(file)]
+  sorted_files = [file for key in KeyStrings for file in spec_files if key in os.path.basename(file)]
   
   #================================================================================================   
   # Read the selected files into a list of 2D Numpy arrays
@@ -738,32 +753,16 @@ def load_TIF_files_to_npa(ImgPath, KeyStrings, MonthStr = '', NoVal = 0, SaveMas
       if profile is None:
         profile = src.profile  # keep metadata if needed later
   
+  with rasterio.open(date_file) as src:
+    data_img = src.read(1) 
+    
   #================================================================================================
   # Stack band images into a multi-band image
   #================================================================================================
-  image = np.stack(bands, axis=-1)    # (H, W, C)
-  
-  mask  = np.all(image != NoVal, axis=-1)
-  
-  # Convert boolean → uint8 (True=1, False=0)
-  mask_uint8 = mask.astype(np.uint8)
+  image = np.stack(bands, axis=-1)    # (H, W, C)  
+  mask  = np.where(data_img > 0, 1, 0).astype(np.uint8)  
 
-  #================================================================================================
-  # Optionally save mask GeoTIFF
-  #================================================================================================
-  if SaveMaskPath is not None:
-    # Update profile for single band, uint8 type
-    mask_profile = profile.copy()
-    mask_profile.update(
-        dtype=rasterio.uint8,
-        count=1,
-        nodata=None
-    )
-
-    with rasterio.open(SaveMaskPath, 'w', **mask_profile) as dst:
-      dst.write(mask_uint8, 1)
-
-  return image, mask_uint8, profile
+  return image, mask, profile
  
   
 
@@ -868,9 +867,9 @@ def land_mask(blu, red, nir, sw1):
       blu, red, nir, sw1: 2D Numpy arrays representing the blue, red, near-infrared, and shortwave-infrared band images.
   '''
   
-  land_cond1 = (sw1 > 3.0) & (sw1 > red)                       # Casted shadow and boundary condition
+  land_cond1 = (sw1 > 3.0) & (sw1 > red)                       # Most land pixels including shadowed terrain and water-edge
   land_cond2 = (sw1 > 15.0)                                    # Bright land condition
-  land_cond3 = ((nir > 15.0) & ((nir >= 2*blu) | (sw1 > red))) # regular land condition
+  land_cond3 = ((nir > 15.0) & ((nir >= 2*blu) | (sw1 > red))) # Some land pixels
 
   return (land_cond1 | land_cond2 | land_cond3)
 
