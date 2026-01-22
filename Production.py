@@ -19,8 +19,10 @@ if str(Path(__file__).parents[0]) not in sys.path:
 import source.eoMosaic as eoMz
 import source.eoParams as eoPM
 import source.eoTileGrids as eoTG
-import source.eoMosaicChatGPT as AIMz
+#import source.eoMosaicChatGPT as AIMz
+import source.eoMosaic as AIMz
 import source.LEAFProduction as leaf
+from leaf_wrapper import LeafWrapper
 
 
 def gdal_mosaic_rasters(sorted_files_to_mosaic:list, merge_output_file:str):
@@ -93,6 +95,38 @@ ProdParams = {
     #'regions': {'ottawa': ottawa_region}  #, {'vancouver': vancouver_region}    
 }
 
+#############################################################################################################
+# Description: This function reads a KML file containing multiple polygon features and converts them
+#              into a LEAF-compatible region dictionary. The output dictionary maps user-defined
+#              region names to GeoJSON-like Polygon objects, which can be directly passed to
+#              ProdParams['regions'] for mosaic generation.
+#
+#############################################################################################################
+def regions_from_kml(kml_file, start=1,  end=5, prefix="region"):
+    """
+    Load a KML and return a dict of polygon regions:
+    {
+        'region1': {...},
+        'region2': {...},
+        ...
+    }
+    """
+    if start < 1 or end < start:
+        raise ValueError("Invalid start or end values. 'start' must be >= 1 and 'end' must be >= 'start'.")
+    
+    wrapper = LeafWrapper(kml_file).load()
+    regions_dict = wrapper.to_region_dict()  # keys = TARGET_FID
+
+    out = {}
+    for i in range(start, min(end, len(regions_dict)) + 1):
+        region_data = regions_dict[i]
+        out[f"{prefix}{i}"] = {
+            "type": "Polygon",
+            "coordinates": region_data["coordinates"],
+        }
+
+    return out
+
 
 
 
@@ -110,6 +144,14 @@ def MosaicProduction(ProdParams, CompParams):
   #==========================================================================================================
   # Standardize the parameter dictionaries so that they are applicable for mosaic generation
   #==========================================================================================================
+  # ----------------------------------------------------------------------------------------------------------
+  # Handle KML-based regions
+  # The call converts given KML file input to LEAF-compatible region dictionary
+  # ----------------------------------------------------------------------------------------------------------
+  if isinstance(ProdParams.get("regions"), str) and ProdParams["regions"].lower().endswith(".kml"):
+      print("<MosaicProduction> Detected KML regions input, loading regions from KML...")
+      ProdParams["regions"] = regions_from_kml(ProdParams["regions"])
+ 
   usedParams = eoPM.get_mosaic_params(ProdParams, CompParams)  
     
   if usedParams is None:
@@ -119,6 +161,7 @@ def MosaicProduction(ProdParams, CompParams):
   print('<MosaicProduction> User defined input parameters:')
   for key, value in usedParams.items():
     print(f'{key}: {value}')
+
 
   #==========================================================================================================
   # Generate composite images based on given input parameters
