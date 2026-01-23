@@ -1794,3 +1794,41 @@ def export_mosaic(inParams, inMosaic):
 #           else:
 #               return 1
           
+'''
+  # ================= POLYGON MASK =================
+  # Apply a lazy polygon mask so that pixels outside the ROI
+  # are excluded from all downstream Dask computations.
+  # This operation is Dask-aware and does NOT trigger compute.
+
+  import geopandas as gpd
+  import rioxarray  # Required to enable the .rio accessor on xarray objects
+  from shapely.geometry import shape
+
+  # Extract the current region polygon from AllParams
+  # AllParams['regions'] is a dict: {'region_name': {geojson_dict}, ...}
+  # AllParams['current_region'] contains the key for the active region
+  if 'regions' not in AllParams or 'current_region' not in AllParams:
+    print('<one_mosaic> Warning: regions or current_region not found in AllParams. Skipping polygon mask.')
+  else:
+    region_geojson = AllParams['regions'][AllParams['current_region']]
+    
+    # Convert GeoJSON dict to Shapely geometry
+    polygon = shape(region_geojson)
+    
+    # Create a GeoDataFrame from the ROI polygon and reproject it
+    # to match the raster CRS (critical for correct masking)
+    roi_gdf = gpd.GeoDataFrame(
+        geometry=[polygon],
+        crs="EPSG:4326"  # Regions are typically in WGS84
+    ).to_crs(base_img.rio.crs)
+
+    # Lazily clip the base image to the ROI polygon
+    # Pixels outside the polygon are set to NaN
+    # The raster extent and chunking remain unchanged (drop=False)
+    base_img = base_img.rio.clip(
+        roi_gdf.geometry,
+        roi_gdf.crs,
+        drop=False
+    )
+  # ===============================================
+'''

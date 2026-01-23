@@ -1,6 +1,7 @@
 import os
 #import re
 import sys
+import copy
 #import subprocess
 import argparse
 from pathlib import Path
@@ -17,8 +18,11 @@ if str(Path(__file__).parents[0]) not in sys.path:
 
 import source.eoMosaic as eoMz
 import source.eoParams as eoPM
-#import source.eoTileGrids as eoTG
+import source.eoTileGrids as eoTG
+#import source.eoMosaicChatGPT as AIMz
+import source.eoMosaic as AIMz
 import source.LEAFProduction as leaf
+from leaf_wrapper import LeafWrapper
 
 
 def gdal_mosaic_rasters(sorted_files_to_mosaic:list, merge_output_file:str):
@@ -64,33 +68,149 @@ vancouver_region = {
 
 
 CompParams = {
+  "number_workers" : 10,   #For S2 data, only use 10 rather than 20
   "debug"       : True,
   "entire_tile" : False,     #
   "nodes"       : 1,
-  "node_memory" : "120G",
-  "number_workers" : 40
+  "node_memory" : "50G",
+  'chunk_size': {'x': 2048, 'y': 2048}
 }
 
   
-
-
 ProdParams = {
-    'sensor': 'S2_SR',       # A sensor type string (e.g., 'S2_SR', 'HLS_SR', 'HLSL30_SR', 'HLSS30_SR' or 'MOD_SR')
+    'sensor': 'HLS_SR',       # A sensor type string (e.g., 'S2_SR', 'HLS_SR', 'HLSL30_SR', 'HLSS30_SR' or 'MOD_SR')
     'unit': 2,                   # A data unit code (1 or 2 for TOA or surface reflectance)    
-    'year': 2020,                # An integer representing image acquisition year
+    'year': 2025,                # An integer representing image acquisition year
     'nbYears': -1,               # positive int for annual product, or negative int for monthly product
-    'months': [8],            # A list of integers represening one or multiple monthes     
-    'tile_names': ['tile41_921'], # A list of (sub-)tile names (defined using CCRS' tile griding system) 
+    'months': [5],            # A list of integers represening one or multiple monthes     
+    'tile_names': ['tile55_422'], # A list of (sub-)tile names (defined using CCRS' tile griding system) 
     'prod_names': ['mosaic'],    #['LAI', 'fCOVER', 'fAPAR', 'Albedo'], 
-    'resolution':10,            # Exporting spatial resolution    
-    'out_folder': 'C:/Work_Data/S2_mosaic_Ottawa_2020_Aug_10m',  # the folder name for exporting
+    'resolution': 30,            # Exporting spatial resolution    
+    'out_folder': 'C:/Work_Data/HLS_mosaic_tile55_422_2025_temp',  # the folder name for exporting
+    'out_datatype': 'int16',     # 'int8' or 'int16'
     'projection': 'EPSG:3979',
     'IncludeAngles': False,
     #'start_dates': ['2025-06-15'],
     #'end_dates': ['2025-09-15'],
-    'regions': {'ottawa': ottawa_region}  #, 'vancouver': vancouver_region}    
+    #'regions': {'ottawa': ottawa_region}  #, {'vancouver': vancouver_region}    
 }
 
+#############################################################################################################
+# Description: This function reads a KML file containing multiple polygon features and converts them
+#              into a LEAF-compatible region dictionary. The output dictionary maps user-defined
+#              region names to GeoJSON-like Polygon objects, which can be directly passed to
+#              ProdParams['regions'] for mosaic generation.
+#
+#############################################################################################################
+def regions_from_kml(kml_file, start=6,  end=7, prefix="region"):
+    """
+    Load a KML and return a dict of polygon regions:
+    {
+        'region1': {...},
+        'region2': {...},
+        ...
+    }
+    """
+    if start < 1 or end < start:
+        raise ValueError("Invalid start or end values. 'start' must be >= 1 and 'end' must be >= 'start'.")
+    
+    wrapper = LeafWrapper(kml_file).load()
+    regions_dict = wrapper.to_region_dict()  # keys = TARGET_FID
+
+    out = {}
+    for i in range(start, min(end, len(regions_dict)) + 1):
+        region_data = regions_dict[i]
+        out[f"{prefix}{i}"] = {
+            "type": "Polygon",
+            "coordinates": region_data["coordinates"],
+        }
+
+    return out
+
+
+
+
+#############################################################################################################
+# Description: This function can be used to perform mosaic production
+#
+#############################################################################################################
+def MosaicProduction(ProdParams, CompParams):
+  '''Produces monthly biophysical parameter maps for a number of tiles and months.
+
+     Args:
+       ProdParams(Python Dictionary): A dictionary containing input parameters related to production;
+       CompParams(Python Dictionary): A dictionary containing input parameters related to used computing environment.
+  '''
+  #==========================================================================================================
+  # Standardize the parameter dictionaries so that they are applicable for mosaic generation
+  #==========================================================================================================
+  # ----------------------------------------------------------------------------------------------------------
+  # Handle KML-based regions
+  # The call converts given KML file input to LEAF-compatible region dictionary
+  # ----------------------------------------------------------------------------------------------------------
+  if isinstance(ProdParams.get("regions"), str) and ProdParams["regions"].lower().endswith(".kml"):
+      print("<MosaicProduction> Detected KML regions input, loading regions from KML...")
+      ProdParams["regions"] = regions_from_kml(ProdParams["regions"])
+ 
+  usedParams = eoPM.get_mosaic_params(ProdParams, CompParams)  
+    
+  if usedParams is None:
+    print('<MosaicProduction> Inconsistent input parameters!')
+    return None
+  
+  print('<MosaicProduction> User defined input parameters:')
+  for key, value in usedParams.items():
+    print(f'{key}: {value}')
+
+
+  #==========================================================================================================
+  # Generate composite images based on given input parameters
+  #==========================================================================================================
+  ext_tiffs_rec = []
+  all_base_tiles = []  
+  
+  if CompParams["entire_tile"]:
+    for tile_name in usedParams['tile_names']:
+      subtiles = eoTG.get_subtile_names(tile_name)
+      for subtile in subtiles:            
+        tile_params = copy.deepcopy(usedParams)
+        print(tile_params)
+        tile_params['tile_names'] = [subtile]
+        
+        tile_params = eoPM.get_mosaic_params(tile_params, CompParams)
+        if len(ext_tiffs_rec) == 0:
+          ext_tiffs_rec, period_str, mosaic = AIMz.one_mosaicB(tile_params, CompParams)
+        else: 
+          _, _, mosaic = AIMz.one_mosaicB(tile_params, CompParams)
+
+        all_base_tiles.append(tile_name)
+  else:
+    region_names = usedParams['regions'].keys()    # A list of region names
+    nTimes       = len(usedParams['start_dates'])  # The number of time windows
+
+    for reg_name in region_names:
+      # Loop through each spatial region
+      usedParams = eoPM.set_spatial_region(usedParams, reg_name)
+      
+      for TIndex in range(nTimes):
+        # Produce vegetation parameter porducts for each time window
+        usedParams = eoPM.set_current_time(usedParams, TIndex)
+
+        # Produce and export products in a specified way (a compact image or separate images)      
+        out_style = str(usedParams['export_style']).lower()
+        if out_style.find('comp') > -1:
+          print('\n<MosaicProduction> Generate and export mosaic images in one file .......')
+          #out_params = compact_params(mosaic, SsrData, ClassImg)
+
+          # Export the 64-bits image to either GD or GCS
+          #export_compact_params(fun_Param_dict, region, out_params, task_list)
+
+        else: 
+          # Produce and export vegetation parameetr maps for a time period and a region
+          print('\n<MosaicProduction> Generate and export separate mosaic images......')        
+          #AIMz.one_mosaicC(usedParams, CompParams)
+          eoMz.one_mosaic(usedParams, CompParams)
+ 
 
 
 
@@ -122,7 +242,7 @@ def main(inProdParams, inCompParams):
     leaf.LEAF_production(prod_params, comp_params)
 
   else:
-    eoMz.MosaicProduction(prod_params, comp_params)
+    MosaicProduction(prod_params, comp_params)
     
 
 
