@@ -2,6 +2,27 @@ KML Region Support for Mosaic Production Overview
 This repo adds native support for defining mosaic processing regions using KML polygon files. Regions are automatically extracted, converted into LEAF-compatible dictionaries, and injected into the mosaic workflow without requiring manual region definitions.
 
 
+
+
+
+New Module: leaf_wrapper.py
+
+New files: 
+afforestationSItesFixed.kml
+production_kml_tiles.ipynb
+LEAF_STAC_TEST.ipynb
+test_regions_kml.py (unused)
+updates_readme.txt
+
+Updated files:
+Production.py
+eoMosiac.py (no changes, new comments, commented out functionality)
+
+
+
+
+
+
 Requirements Update:
 The requirements.txt file has been updated to document two installation commands:
 Install core Python dependencies
@@ -10,9 +31,8 @@ This split may potentially avoid common installation issues with geopandas (Inst
 During development, the requirements were installed in two steps following this approach.
 
 
-New Module: leaf_wrapper.py
-The LeafWrapper class provides a thin abstraction for reading polygon files (KML or other formats supported by GeoPandas) and converting them into LEAF-compatible region definitions.
-
+The LeafWrapper class (in leaf_wrapper.py)
+provides a thin abstraction for reading polygon files (KML or other formats supported by GeoPandas) and converting them into LEAF-compatible region definitions.
 Key Features
 Reads KML afforestation documents
 Loads polygons into a GeoDataFrame
@@ -30,7 +50,11 @@ Each region contains:
 Regions can be uniquely identified using the TARGET_FID attribute.
 
 
-KML Helper Function: regions_from_kml
+
+
+
+
+KML Helper Function: regions_from_kml (in leaf_wrapper.py)
 A new helper function in production.py converts a KML file into a dictionary suitable for ProdParams["regions"].
 
 Function Behavior
@@ -46,9 +70,17 @@ Example Output
 }
 
 
-Automatic KML Detection in MosaicProduction
+
+
+
+Automatic KML Detection in MosaicProduction (production.py)
 MosaicProduction now detects when ProdParams["regions"] is a string ending in .kml.
 When detected, the KML is automatically converted before UsedParams is created.
+
+
+
+
+
 
 Example Notebook
 production_kml_tiles.ipynb

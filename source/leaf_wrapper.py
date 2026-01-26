@@ -3,6 +3,37 @@ from pathlib import Path   # <-- add this
 from typing import Dict, List, Union
 from shapely.geometry import mapping
 
+#############################################################################################################
+# Description: This function reads a KML file containing multiple polygon features and converts them
+#              into a LEAF-compatible region dictionary. The output dictionary maps user-defined
+#              region names to GeoJSON-like Polygon objects, which can be directly passed to
+#              ProdParams['regions'] for mosaic generation.
+#
+#############################################################################################################
+def regions_from_kml(kml_file, start=5,  end=7, prefix="region"):
+    """
+    Load a KML and return a dict of polygon regions:
+    {
+        'region1': {...},
+        'region2': {...},
+        ...
+    }
+    """
+    if start < 1 or end < start:
+        raise ValueError("Invalid start or end values. 'start' must be >= 1 and 'end' must be >= 'start'.")
+    
+    wrapper = LeafWrapper(kml_file).load()
+    regions_dict = wrapper.to_region_dict()  # keys = TARGET_FID
+
+    out = {}
+    for i in range(start, min(end, len(regions_dict)) + 1):
+        region_data = regions_dict[i]
+        out[f"{prefix}{i}"] = {
+            "type": "Polygon",
+            "coordinates": region_data["coordinates"],
+        }
+
+    return out
 
 class LeafWrapper:
     def __init__(self, polygon_file):
