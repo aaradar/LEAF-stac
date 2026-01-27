@@ -116,11 +116,18 @@ def MosaicProduction(ProdParams, CompParams):
   # The call converts given KML file input to LEAF-compatible region dictionary
   # ----------------------------------------------------------------------------------------------------------
   try:
-      regions = ProdParams.get("regions")
+    regions = ProdParams.get("regions")
 
-      if regions.lower().endswith(".kml"):
-          print("<MosaicProduction> Detected KML regions input, loading regions from KML...")
-          ProdParams["regions"] = leafWrapper.regions_from_kml(regions)
+    if isinstance(regions, str) and regions.lower().endswith((".kml", ".shp")):
+        print("<MosaicProduction> Detected file-based regions input, loading regions...")
+
+        # Apply buffer only for SHP
+        spatial_buffer_m = 300 if regions.lower().endswith(".shp") else None
+
+        ProdParams["regions"] = leafWrapper.regions_from_kml(
+            regions,
+            spatial_buffer_m=spatial_buffer_m
+        )
 
   except (AttributeError, TypeError):
       # regions is None or not a string — skip silently
@@ -236,3 +243,36 @@ if __name__ == "__main__":
 
   main(args.ProdParams, args.CompParams)
 
+'''
+
+try:
+      regions = ProdParams.get("regions")
+
+      if regions.lower().endswith(".kml"):
+          print("<MosaicProduction> Detected KML regions input, loading regions from KML...")
+          ProdParams["regions"] = leafWrapper.regions_from_kml(regions)
+
+  except (AttributeError, TypeError):
+      # regions is None or not a string — skip silently
+      pass
+
+
+
+
+try:
+    regions = ProdParams.get("regions")
+
+    if isinstance(regions, str) and regions.lower().endswith((".kml", ".shp")):
+        print("<MosaicProduction> Detected file-based regions input, loading regions...")
+
+        # Apply buffer only for SHP
+        spatial_buffer_m = 1000 if regions.lower().endswith(".shp") else None
+
+        ProdParams["regions"] = leafWrapper.regions_from_kml(
+            regions,
+            spatial_buffer_m=spatial_buffer_m
+        )
+
+  except (AttributeError, TypeError):
+      # regions is None or not a string — skip silently
+      pass'''

@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metadata xml:lang="en"><Esri><CreaDate>20190715</CreaDate><CreaTime>18192400</CreaTime><ArcGISFormat>1.0</ArcGISFormat><SyncOnce>TRUE</SyncOnce><DataProperties><lineage><Process ToolSource="c:\users\bonneymi\appdata\local\programs\arcgis\pro\Resources\ArcToolbox\toolboxes\Spatial Analyst Tools.tbx\ExtractMultiValuesToPoints" Date="20190715" Time="181924">ExtractMultiValuesToPoints FieldPoints32_2018 "median_tca_snap2real.tif tca_med" NONE</Process></lineage></DataProperties></Esri></metadata>
