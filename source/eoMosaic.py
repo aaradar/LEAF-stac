@@ -1201,6 +1201,24 @@ def get_granule_mosaic(Input_tuple):
   #BaseImgRefGrid, granule, StacItems, MosaicParams = Input_tuple
 
   #==========================================================================================================
+  # Enforce: Verify all regions are fully loaded before processing this granule
+  # This ensures we only run a tile once all 'regions' dict is complete
+  #==========================================================================================================
+ # if 'regions' in MosaicParams:
+ #   if not MosaicParams['regions']:
+  #    print(f'<get_granule_mosaic> ERROR: regions dict is empty for {granule} granule. Aborting tile processing.')
+    #  return None
+    # Optionally verify required regions exist
+   # required_regions = MosaicParams.get('required_regions', [])
+   # if required_regions:
+   #   missing_regions = [r for r in required_regions if r not in MosaicParams['regions']]
+    #  if missing_regions:
+     #   print(f'<get_granule_mosaic> ERROR: Missing required regions for {granule}: {missing_regions}. Aborting tile processing.')
+      #  return None
+ # else:
+  #  print(f'<get_granule_mosaic> WARNING: No regions dict found in MosaicParams for {granule}. Proceeding without region validation.')
+
+  #==========================================================================================================
   # Extract parameters from "MosaicParams"
   #==========================================================================================================  
   SsrData    = MosaicParams['SsrData']
@@ -1454,6 +1472,16 @@ def create_mosaic_at_once_distributed(base_img, unique_granules, stac_items, Mos
         time.sleep(5)
     worker_names = [info['name'] for worker, info in workers_info.items()]
     
+    # ========================================================================================================
+    # Enforce: Ensure all regions are fully loaded before submitting granule jobs
+    # This prevents tiles from being submitted while region data is still being fetched
+    # ========================================================================================================
+   # if 'regions' not in MosaicParams or not MosaicParams['regions']:
+     # raise ValueError("ERROR: regions dict is empty or missing in MosaicParams. Cannot proceed without complete region data.")
+    
+   # print(f"Regions fully loaded: {list(MosaicParams['regions'].keys())}")
+   # print(f"Submitting {len(unique_granules)} granule processing jobs with complete region data...")
+    
     # we submit the jobs to the cluster to process them in a distributed manner 
     granule_mosaics_data = [(base_img, granule, stac_items, MosaicParams) for granule in unique_granules]
     granule_mosaics = []
@@ -1530,6 +1558,16 @@ def create_mosaic_at_once_one_machine(BaseImg, unique_granules, stac_items, Mosa
     client = Client(cluster)
     #client.register_worker_callbacks(setup=disable_spill)
     print(f'\n\n<<<<<<<<<< Dask dashboard is available {client.dashboard_link} >>>>>>>>>')
+
+    #========================================================================================================
+    # Enforce: Ensure all regions are fully loaded before submitting granule jobs
+    # This prevents tiles from being submitted while region data is still being fetched
+    #========================================================================================================
+   # if 'regions' not in MosaicParams or not MosaicParams['regions']:
+    #  raise ValueError("ERROR: regions dict is empty or missing in MosaicParams. Cannot proceed without complete region data.")
+    
+   # print(f"Regions fully loaded: {list(MosaicParams['regions'].keys())}")
+   # print(f"Submitting {len(unique_granules)} granule processing jobs with complete region data...")
 
     #========================================================================================================
     # Submit the jobs to the clusters to process them in a parallel mode 

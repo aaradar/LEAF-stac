@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2" xmlns:kml="http://www.opengis.net/kml/2.2" xmlns:atom="http://www.w3.org/2005/Atom">
+<Document>
+	<name>GTA</name>
+	<gx:CascadingStyle kml:id="__managed_style_2CEBD72C8F3D4047C3E8">
+		<Style>
+			<IconStyle>
+				<scale>1.2</scale>
+				<Icon>
+					<href>https://earth.google.com/earth/document/icon?color=1976d2&amp;id=2000&amp;scale=4</href>
+				</Icon>
+				<hotSpot x="64" y="128" xunits="pixels" yunits="insetPixels"/>
+			</IconStyle>
+			<LabelStyle>
+			</LabelStyle>
+			<LineStyle>
+				<color>ff2dc0fb</color>
+				<width>6</width>
+			</LineStyle>
+			<PolyStyle>
+				<color>40ffffff</color>
+			</PolyStyle>
+			<BalloonStyle>
+				<displayMode>hide</displayMode>
+			</BalloonStyle>
+		</Style>
+	</gx:CascadingStyle>
+	<gx:CascadingStyle kml:id="__managed_style_1DA28C93FE3D4047C3E8">
+		<Style>
+			<IconStyle>
+				<Icon>
+					<href>https://earth.google.com/earth/document/icon?color=1976d2&amp;id=2000&amp;scale=4</href>
+				</Icon>
+				<hotSpot x="64" y="128" xunits="pixels" yunits="insetPixels"/>
+			</IconStyle>
+			<LabelStyle>
+			</LabelStyle>
+			<LineStyle>
+				<color>ff2dc0fb</color>
+				<width>4</width>
+			</LineStyle>
+			<PolyStyle>
+				<color>40ffffff</color>
+			</PolyStyle>
+			<BalloonStyle>
+				<displayMode>hide</displayMode>
+			</BalloonStyle>
+		</Style>
+	</gx:CascadingStyle>
+	<StyleMap id="__managed_style_0AC0BE6AB73D4047C3E8">
+		<Pair>
+			<key>normal</key>
+			<styleUrl>#__managed_style_1DA28C93FE3D4047C3E8</styleUrl>
+		</Pair>
+		<Pair>
+			<key>highlight</key>
+			<styleUrl>#__managed_style_2CEBD72C8F3D4047C3E8</styleUrl>
+		</Pair>
+	</StyleMap>
+	<Folder id="01984DF76C3D404E694B">
+		<name>regions_ge</name>
+		<open>1</open>
+		<styleUrl>#__managed_style_0AC0BE6AB73D4047C3E8</styleUrl>
+		<Placemark id="0EA1A859123D404AC6CF">
+			<name>Oshawa</name>
+			<LookAt>
+				<longitude>-79.11009695101261</longitude>
+				<latitude>43.7909546787741</latitude>
+				<altitude>86.177341341386</altitude>
+				<heading>359.9074829445852</heading>
+				<tilt>0</tilt>
+				<gx:fovy>35</gx:fovy>
+				<range>202624.0946926922</range>
+				<altitudeMode>absolute</altitudeMode>
+			</LookAt>
+			<styleUrl>#__managed_style_0AC0BE6AB73D4047C3E8</styleUrl>
+			<Polygon>
+				<outerBoundaryIs>
+					<LinearRing>
+						<coordinates>
+							-78.65333418512718,43.84916445035168,0 -78.68471418821491,43.9584330246895,0 -78.94907153710807,43.98069565257968,0 -79.02598218029945,43.85574300932127,0 -78.65333418512718,43.84916445035168,0 
+						</coordinates>
+					</LinearRing>
+				</outerBoundaryIs>
+			</Polygon>
+		</Placemark>
+		<Placemark id="09C732BE763D404A24B1">
+			<name>Mississauga</name>
+			<LookAt>
+				<longitude>-79.50698752944687</longitude>
+				<latitude>43.79577515006684</latitude>
+				<altitude>201.6572551165506</altitude>
+				<heading>359.9074839014986</heading>
+				<tilt>0</tilt>
+				<gx:fovy>35</gx:fovy>
+				<range>386701.5767299756</range>
+				<altitudeMode>absolute</altitudeMode>
+			</LookAt>
+			<styleUrl>#__managed_style_0AC0BE6AB73D4047C3E8</styleUrl>
+			<Polygon>
+				<outerBoundaryIs>
+					<LinearRing>
+						<coordinates>
+							-79.80946087284859,43.42593676699458,0 -79.61003993929316,43.34237280854013,0 -79.51778696819332,43.44519500895576,0 -79.51344768403429,43.5713593148721,0 -79.59020944316822,43.62671477084837,0 -79.70659243713334,43.69035294871834,0 -79.86119854240982,43.55367879140752,0 -79.80946087284859,43.42593676699458,0 
+						</coordinates>
+					</LinearRing>
+				</outerBoundaryIs>
+			</Polygon>
+		</Placemark>
+		<Placemark id="09987D6A2E3D404985C3">
+			<name>Toronto</name>
+			<LookAt>
+				<longitude>-79.38520453620944</longitude>
+				<latitude>43.85906026743908</latitude>
+				<altitude>275.1365257071726</altitude>
+				<heading>359.9074841432881</heading>
+				<tilt>0</tilt>
+				<gx:fovy>35</gx:fovy>
+				<range>302753.270103559</range>
+				<altitudeMode>absolute</altitudeMode>
+			</LookAt>
+			<styleUrl>#__managed_style_0AC0BE6AB73D4047C3E8</styleUrl>
+			<Polygon>
+				<outerBoundaryIs>
+					<LinearRing>
+						<coordinates>
+							-79.50274523727077,43.58698895180837,0 -79.34636090822829,43.54769313243187,0 -79.21918091082389,43.60173730736425,0 -79.22278375329967,43.77818867381093,0 -79.48166169040522,43.79246148116914,0 -79.55404080963247,43.66717981278835,0 -79.50274523727077,43.58698895180837,0 
+						</coordinates>
+					</LinearRing>
+				</outerBoundaryIs>
+			</Polygon>
+		</Placemark>
+	</Folder>
+</Document>
+</kml>

@@ -15,45 +15,23 @@ Native support for defining mosaic regions using **KML polygon files** and **Sha
 
 **Updated Files:**
 - `Production.py` — Automatic KML/SHP detection
-- `eoParams.py` - Date and all_params updates
 - `requirements.txt` — Two-step GeoPandas installation
 
 ---
 
 ## Installation
-- Install Python
-- Install Anaconda and Dependencies
+- Install Anaconda
 - Install QGIS to inspect images
 - Run ipynb files on Jupyter
-
-
-**Step 0: Create and activate a Conda environment**
-```bash
-conda create -n leaf-env python=3.11.14
-conda activate leaf-env
-```
 
 **Step 1: Core dependencies**
 ```bash
 conda install -c conda-forge click==8.1.7 dask==2024.5.2 dask-jobqueue==0.9.0 numpy==1.24.4 odc-geo==0.4.8 odc-stac==0.3.10 pandas==2.2.3 psutil==5.9.8 pyproj==3.6.1 pystac-client==0.8.2 rasterio==1.3.10 Requests==2.32.3 rioxarray==0.15.6 stackstac==0.5.1 tqdm==4.66.4 urllib3==2.3.0 xarray==2024.6.0 "bokeh!=3.0.*,>=2.4.2" gdal
 ```
 
-**Step 2: GeoPandas and spatial libraries dependencies**
+**Step 2: GeoPandas and spatial libraries**
 ```bash
 conda install -c conda-forge geopandas shapely pyogrio packaging
-```
-
-**Step 3: Connect the Conda environment to Jupyter**
-```bash
-conda install ipykernel
-python -m ipykernel install --user --name leaf-env --display-name "Python (leaf-env)"
-```
-
-**Step 4: Run notebooks**
-```bash
-jupyter notebook
-# or
-jupyter lab
 ```
 
 ---
@@ -84,22 +62,6 @@ regions = regions_from_kml(
 # There is Prodparams for regions_start_index, regions_end_index, spatial_buffer_m
 ```
 
-### Multi-Year Monthly Mosaics
-```python
-# Generate June-July mosaics for 5 consecutive years
-ProdParams = {
-    'sensor': 'S2_SR',
-    'year': 2020,              # Starting year
-    'num_years': 5,            # Repeat for 2020-2024
-    'months': [6, 7],          # June and July each year
-    'temporal_buffer': [-30, 10],  # Extend time windows
-    'regions': 'AfforestationSItesFixed.kml',
-    'resolution': 30,
-    'projection': 'EPSG:3979'
-}
-# Produces 10 time windows: Jun/Jul for each of 5 years
-```
-
 ### Automatic Detection in MosaicProduction
 
 ```python
@@ -120,21 +82,12 @@ When `regions` is a `.kml` or `.shp` file path, it's automatically converted to 
 
 ---
 
-## Temporal Modes
-
-| Mode | Parameters | Example | Output |
-|------|-----------|---------|--------|
-| Single month(s) | `months`, `year` | `months=[6,7], year=2023` | June 2023, July 2023 |
-| Custom date range | `start_dates`, `end_dates` | `start_dates=['2023-06-15'], end_dates=['2023-09-15']` | Single window |
-| Multi-year months | `months`, `year`, `num_years` | `months=[6,7], year=2020, num_years=5` | Jun/Jul 2020-2024 (10 windows) |
-
-**Temporal Buffer**: Works with all modes. Adds/subtracts days from each time window.
-
 ## Function Reference
 
 ### `regions_from_kml()`
+
 ```python
-regions_from_kml(kml_file, start=0, end=2, prefix="region", spatial_buffer_m=None, temporal_buffer=None, num_years=None) -> dict
+regions_from_kml(kml_file, start=0, end=2, prefix="region", spatial_buffer_m=None) -> dict
 ```
 
 **Parameters:**
@@ -143,8 +96,6 @@ regions_from_kml(kml_file, start=0, end=2, prefix="region", spatial_buffer_m=Non
 - `end` (int): Ending position (0-based, inclusive). Default: 2
 - `prefix` (str): Key prefix in output. Default: "region"
 - `spatial_buffer_m` (float): Buffer size in meters for Point geometries. Default: None
-- `temporal_buffer` (list): [start_days, end_days] adds/removes specified days to start_date and end_date. Only works with custom date ranges, not `months`. Default: None
-- `num_years` (int): Number of years to repeat the specified months. Only works with `months`, not custom dates. Default: None
 
 **Returns:** Dictionary with keys `{prefix}{region_id}` and GeoJSON Polygon values
 
@@ -184,33 +135,8 @@ regions = wrapper.to_region_dict()
 **Point buffering** — Creates square bounding boxes for Point geometries as well for Multipolygons containing > 1 polygon  
 **Position-based selection** — Select regions by index range, not ID  
 **Metadata preservation** — Extracts start_date, end_date from attributes  
-**Multi-year monthly mosaics** — Repeat specified months across multiple years using `num_years` parameter
-**Negative spatial buffer handling** - Sets Polygon as None when there is no area in the parsed Polygon
 
 ---
-
-## ProdParams Reference
-
-### Spatial Parameters
-- `regions` (str/dict): KML/SHP file path or region dictionary
-- `regions_start_index` (int): Starting region index. Default: 0
-- `regions_end_index` (int): Ending region index. Default: None (start_index : end)
-- `spatial_buffer_m` (float): Buffer in meters for point geometries. Default: None
-
-### Temporal Parameters
-- `year` (int): Starting year
-- `months` (list): Month numbers [1-12]
-- `start_dates` (list): Custom start dates ['YYYY-MM-DD']
-- `end_dates` (list): Custom end dates ['YYYY-MM-DD']
-- `temporal_buffer` (list): [start_days, end_days] offset. Default: None
-- `num_years` (int): Years to repeat months. Only with `months`. Default: None
-
-### Production Parameters
-- `sensor` (str): 'S2_SR', 'HLSS30_SR', 'HLSL30_SR', 'HLS_SR'
-- `resolution` (int): Output resolution in meters
-- `projection` (str): EPSG code. Default: 'EPSG:3979'
-- `prod_names` (list): ['mosaic', 'LAI', 'fCOVER', 'fAPAR', 'Albedo']
-- `out_folder` (str): Output directory path
 
 ## Running Notebooks
 
@@ -261,8 +187,7 @@ Tests both KML and Shapefile outputs for:
 | `ValueError: Invalid start/end` | Verify start <= end and start >= 0 |
 | `ValueError: No regions found` | Increase `end` value |
 | `ModuleNotFoundError: geopandas` | Run `pip install geopandas` |
-| `ValueError: num_years with custom dates` | `num_years` only works with `months`, not `start_dates`/`end_dates` |
-| `ValueError: Invalid num_years` | Must be positive integer > 0 |
+
 ---
 
 ## Coordinate Conversion

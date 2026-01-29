@@ -19,10 +19,9 @@ if str(Path(__file__).parents[0]) not in sys.path:
 import source.eoMosaic as eoMz
 import source.eoParams as eoPM
 import source.eoTileGrids as eoTG
-#import source.eoMosaicChatGPT as AIMz
 import source.eoMosaic as AIMz
 import source.LEAFProduction as leaf
-from leaf_wrapper import LeafWrapper
+import source.leaf_wrapper as leafWrapper
 
 
 def gdal_mosaic_rasters(sorted_files_to_mosaic:list, merge_output_file:str):
@@ -90,42 +89,13 @@ ProdParams = {
     'out_datatype': 'int16',     # 'int8' or 'int16'
     'projection': 'EPSG:3979',
     'IncludeAngles': False,
+    'spatial_buffer_m': 300,
+    'regions_start_index': 0,
+    'regions_end_index': 5,
     #'start_dates': ['2025-06-15'],
     #'end_dates': ['2025-09-15'],
     #'regions': {'ottawa': ottawa_region}  #, {'vancouver': vancouver_region}    
 }
-
-#############################################################################################################
-# Description: This function reads a KML file containing multiple polygon features and converts them
-#              into a LEAF-compatible region dictionary. The output dictionary maps user-defined
-#              region names to GeoJSON-like Polygon objects, which can be directly passed to
-#              ProdParams['regions'] for mosaic generation.
-#
-#############################################################################################################
-def regions_from_kml(kml_file, start=6,  end=7, prefix="region"):
-    """
-    Load a KML and return a dict of polygon regions:
-    {
-        'region1': {...},
-        'region2': {...},
-        ...
-    }
-    """
-    if start < 1 or end < start:
-        raise ValueError("Invalid start or end values. 'start' must be >= 1 and 'end' must be >= 'start'.")
-    
-    wrapper = LeafWrapper(kml_file).load()
-    regions_dict = wrapper.to_region_dict()  # keys = TARGET_FID
-
-    out = {}
-    for i in range(start, min(end, len(regions_dict)) + 1):
-        region_data = regions_dict[i]
-        out[f"{prefix}{i}"] = {
-            "type": "Polygon",
-            "coordinates": region_data["coordinates"],
-        }
-
-    return out
 
 
 
@@ -148,9 +118,28 @@ def MosaicProduction(ProdParams, CompParams):
   # Handle KML-based regions
   # The call converts given KML file input to LEAF-compatible region dictionary
   # ----------------------------------------------------------------------------------------------------------
-  if isinstance(ProdParams.get("regions"), str) and ProdParams["regions"].lower().endswith(".kml"):
-      print("<MosaicProduction> Detected KML regions input, loading regions from KML...")
-      ProdParams["regions"] = regions_from_kml(ProdParams["regions"])
+  
+  try:
+    regions = ProdParams.get("regions")
+
+    if isinstance(regions, str) and regions.lower().endswith((".kml", ".shp")):
+        print("<MosaicProduction> Detected file-based regions input, loading regions...")
+
+        # Apply buffer only for SHP
+        spatial_buffer_m = 300 if regions.lower().endswith(".shp") else None
+
+        ProdParams["regions"] = leafWrapper.regions_from_kml(
+            regions,
+            start=ProdParams.get("regions_start_index", 0),
+            end=ProdParams.get("regions_end_index", 5),
+            spatial_buffer_m=spatial_buffer_m
+        )
+
+  except (AttributeError, TypeError):
+      # regions is None or not a string — skip silently
+      pass
+
+
  
   usedParams = eoPM.get_mosaic_params(ProdParams, CompParams)  
     
@@ -259,4 +248,3 @@ if __name__ == "__main__":
   args = parser.parse_args()
 
   main(args.ProdParams, args.CompParams)
-

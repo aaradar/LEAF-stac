@@ -11,7 +11,7 @@ import eoImage as eoIM
 import eoUtils as eoUs
 from pathlib import Path
 import eoTileGrids as eoTG
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 
@@ -19,6 +19,7 @@ from datetime import datetime
 # Description: Define a default execution parameter dictionary. 
 # 
 # Revision history:  2022-Mar-29  Lixin Sun  Initial creation
+#                 2026-Jan-29  Alexander Radar added  'regions_start_index', 'regions_end_index', 'spatial_buffer_m', 'temporal_buffer', 'num_years'
 #
 #############################################################################################################
 # DefaultParams = {
@@ -51,7 +52,7 @@ all_param_keys = ['sensor', 'ID', 'unit', 'bands', 'year', 'nbYears', 'months', 
                   'out_location', 'resolution', 'GCS_bucket', 'out_folder', 'export_style', 'out_datatype', 'projection', 'CloudScore',
                   'monthly', 'start_dates', 'end_dates', 'regions', 'scene_ID', 'current_time', 'current_region', 
                   'time_str','cloud_cover', 'SsrData', 'Criteria', 'IncludeAngles', 'debug', 'entire_tile',
-                  'nodes', 'node_memory', 'number_workers', 'worker_threads', 'chunk_size', 'account', 'standardized']
+                  'nodes', 'node_memory', 'number_workers', 'worker_threads', 'chunk_size', 'account', 'standardized', 'regions_start_index', 'regions_end_index', 'spatial_buffer_m', 'temporal_buffer', 'num_years']
 
 
 
@@ -681,6 +682,28 @@ def valid_CompParams(CompParams):
   return all_valid, outParams
 
 
+#############################################################################################################
+# Description: This function applies a temporal buffer (in days) to a date string or datetime object.
+# Revision history: 2026-Jan-15  Alexander Radar Initial creation
+#
+#############################################################################################################
+def apply_temporal_buffer_to_date(date_str, buffer_days):
+    """
+    Apply a temporal buffer (in days) to a date string or datetime object.
+    
+    Args:
+        date_str: Either a string in 'YYYY-MM-DD' format or a datetime object
+        buffer_days: Number of days to add (can be negative)
+    
+    Returns:
+        Same type as input (string or datetime object) with buffer applied
+    """
+    if isinstance(date_str, str):
+        dt = datetime.strptime(date_str, '%Y-%m-%d')
+        buffered_dt = dt + timedelta(days=buffer_days)
+        return buffered_dt.strftime('%Y-%m-%d')
+    else:
+        return date_str + timedelta(days=buffer_days)
 
 
 #############################################################################################################
@@ -688,28 +711,78 @@ def valid_CompParams(CompParams):
 #              them into two lists with 'start_dates' and 'end_dates' keys.
 #
 # Revision history  2024-Sep-03  Lixin Sun  Initial creation
+#                   2026-Jan-29  Alexander Radar  Added temporal buffer functionality and num_years support
+#                   
 #
 #############################################################################################################
 def form_time_windows(inParams):
 
   if not has_custom_window(inParams):
     inParams['monthly'] = True
-    nMonths = len(inParams['months'])  # get the number of specified months
+    
+    # Check if we're in "repeated months for X years" mode
+    if 'num_years' in inParams and inParams['num_years'] > 1:
+      # Mode 3: Repeated months for X years
+      nMonths = len(inParams['months'])
+      num_years = inParams['num_years']
+      start_year = inParams['year']
+      
+      inParams['start_dates'] = []
+      inParams['end_dates'] = []
+      
+      # Loop through each year
+      for year_offset in range(num_years):
+        current_year = start_year + year_offset
+        
+        # Loop through each month for this year
+        for month in inParams['months']:
+          start, end = eoUs.month_range(current_year, month)
+          
+          # Apply temporal buffer if specified
+          if 'temporal_buffer' in inParams:
+            buffer_start = inParams['temporal_buffer'][0]
+            buffer_end = inParams['temporal_buffer'][1]
+            
+            start = apply_temporal_buffer_to_date(start, buffer_start)
+            end = apply_temporal_buffer_to_date(end, buffer_end)
+          
+          inParams['start_dates'].append(start)
+          inParams['end_dates'].append(end)
+    
+    else:
+      # Original mode: single year, multiple months
+      nMonths = len(inParams['months'])
+      year = inParams['year']
+      
+      for index in range(nMonths):
+        month = inParams['months'][index]
+        start, end = eoUs.month_range(year, month)
+        
+        # Apply temporal buffer if specified
+        if 'temporal_buffer' in inParams:
+          buffer_start = inParams['temporal_buffer'][0]
+          buffer_end = inParams['temporal_buffer'][1]
+          
+          start = apply_temporal_buffer_to_date(start, buffer_start)
+          end = apply_temporal_buffer_to_date(end, buffer_end)
 
-    year = inParams['year']
-    for index in range(nMonths):
-      month = inParams['months'][index]
-      start, end = eoUs.month_range(year, month)
-
-      if index == 0:
-        inParams['start_dates'] = [start]
-        inParams['end_dates']   = [end]
-      else:  
-        inParams['start_dates'].append(start)
-        inParams['end_dates'].append(end) 
+        if index == 0:
+          inParams['start_dates'] = [start]
+          inParams['end_dates'] = [end]
+        else:  
+          inParams['start_dates'].append(start)
+          inParams['end_dates'].append(end)
 
   elif 'standardized' not in inParams:
     inParams['monthly'] = False
+    
+    # Apply temporal buffer to custom windows if needed
+    if 'temporal_buffer' in inParams and 'start_dates' in inParams and 'end_dates' in inParams:
+      buffer_start = inParams['temporal_buffer'][0]
+      buffer_end = inParams['temporal_buffer'][1]
+      
+      inParams['start_dates'] = [apply_temporal_buffer_to_date(d, buffer_start) for d in inParams['start_dates']]
+      inParams['end_dates'] = [apply_temporal_buffer_to_date(d, buffer_end) for d in inParams['end_dates']]
   
   inParams['current_time'] = 0
 
@@ -1146,6 +1219,26 @@ def cmd_arguments(argv=None):
     help="The STAC Catalog Json file for the desired Region of interest. "
   )
 
+  #Leaf wrapper related arguments
+  parser.add_argument(
+      '-rsi', '--regions_start_index',
+      type=int,
+      default=0,
+      help="Start index (inclusive) when slicing regions from an input KML/SHP path."
+  )
+  parser.add_argument(
+      '-rei', '--regions_end_index',
+      type=int,
+      default=None,
+      help="End index (exclusive) when slicing regions from an input KML/SHP path."
+  )
+  parser.add_argument(
+      '-sb', '--spatial_buffer_m',
+      type=float,
+      default=None,
+      help="Buffer distance in meters to apply to regions when input is a SHP (ignored for KML)."
+  )
+
   args = parser.parse_args()
   
   sensor     = args.sensor
@@ -1171,6 +1264,12 @@ def cmd_arguments(argv=None):
   number_workers = args.number_workers
   nodes          = args.nodes if not debug else 1
   node_memory    = args.node_memory
+
+
+  # Leaf wrapper related parameters
+  regions_start_index = args.regions_start_index
+  regions_end_index   = args.regions_end_index
+  spatial_buffer_m    = args.spatial_buffer_m
   
   region_cr = {}
   id_custom = None
@@ -1214,6 +1313,9 @@ def cmd_arguments(argv=None):
       "out_folder" : out_folder,
       "projection" : projection,
       "IncludeAngles" : IncludeAngles,
+      "spatial_buffer_m" : spatial_buffer_m,
+      "regions_start_index" : regions_start_index,
+      "regions_end_index" : regions_end_index
   }
   if 'end_dates' != "":
       prod_params["end_dates"] = end_dates

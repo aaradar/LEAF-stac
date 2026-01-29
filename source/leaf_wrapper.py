@@ -2,6 +2,8 @@ import geopandas as gpd
 from pathlib import Path
 from typing import Dict, List, Union, Optional
 from shapely.geometry import mapping
+from shapely.geometry import Polygon as ShapelyPolygon
+from shapely.ops import unary_union, transform
 
 #############################################################################################################
 # Description: This function reads a KML or Shapefile containing polygon/point features and converts them
@@ -9,9 +11,10 @@ from shapely.geometry import mapping
 #              buffer can be applied to convert points to polygons. The output dictionary maps user-defined
 #              region names to GeoJSON-like Polygon objects, which can be directly passed to
 #              ProdParams['regions'] for mosaic generation.
-#
+# 
+# Revision history:  2025-January-19  Alexander Radar  Initial creation
 #############################################################################################################
-def regions_from_kml(kml_file, start=0, end=2, prefix="region", spatial_buffer_m=None):
+def regions_from_kml(kml_file, start=14, end=14, prefix="region", spatial_buffer_m=None):
     """
     Load a KML or Shapefile and return a dict of polygon regions by file ID.
     
@@ -42,7 +45,7 @@ def regions_from_kml(kml_file, start=0, end=2, prefix="region", spatial_buffer_m
         regions = regions_from_kml('file.kml', start=1, end=5)
         # Returns: {'region39': {...}, 'region45': {...}, 'region47': {...}, 'region52': {...}, 'region53': {...}}
     """
-    if start < 0 or end < start:
+    if start < 0 or (end is not None and end < start):
         raise ValueError("Invalid start or end values. 'start' must be >= 0 and 'end' must be >= 'start'.")
     
     wrapper = LeafWrapper(kml_file, spatial_buffer_m=spatial_buffer_m).load()
@@ -50,23 +53,52 @@ def regions_from_kml(kml_file, start=0, end=2, prefix="region", spatial_buffer_m
     
     # Get sorted keys and select by position
     sorted_keys = sorted(regions_dict.keys())
-    selected_keys = sorted_keys[start : end + 1]
+    # Handle end=None → go to end of file
+    if end is None:
+        selected_keys = sorted_keys[start:]
+    else:
+        selected_keys = sorted_keys[start : end + 1]
     
     if not selected_keys:
         raise ValueError(f"No regions found in range [{start}:{end+1}]. File has {len(sorted_keys)} regions.")
     
+    
     out = {}
     for key in selected_keys:
         region_data = regions_dict[key]
-        # Use the actual ID/key from the file (TARGET_FID, point ID, etc.)
-        out[f"{prefix}{region_data['id']}"] = {
+        file_id = region_data.get("r_id", key)
+        coords = region_data.get("coordinates", [])
+
+        if not coords: 
+            continue # nothing to output
+
+        # coords is guaranteed to be: [[ring]]
+        out[f"{prefix}{file_id}"] = {
             "type": "Polygon",
-            "coordinates": region_data["coordinates"],
+            "coordinates": coords,
         }
 
     return out
 
 
+
+#############################################################################################################
+# Class: LeafWrapper
+#
+# Description:
+#  ------------
+#  Wrapper class to load KML or Shapefile polygon/point data into a GeoDataFrame,
+#  optionally apply a spatial buffer to point or polygon geometries, and convert
+#  the data into a dictionary format compatible with LEAF mosaic generation.
+#
+#  Features:
+#    - Load KML (.kml) or Shapefile (.shp) files
+#    - Drop Z coordinates (altitude) to ensure 2D polygons
+#    - Apply metric buffer to points or polygons
+#    - Convert MultiPolygon geometries to single polygons or bounding boxes
+#    - Generate a dictionary suitable for ProdParams['regions']
+#
+#############################################################################################################
 class LeafWrapper:
     def __init__(self, polygon_file, spatial_buffer_m=None):
         self.polygon_file = Path(polygon_file)
@@ -87,6 +119,9 @@ class LeafWrapper:
         if self.gdf.empty:
             raise ValueError("Loaded polygon file contains no geometries.")
         
+        #  Drop Z coordinates if present
+        self.gdf["geometry"] = self.gdf.geometry.apply(drop_z) 
+
         # Apply spatial buffer if specified
         if self.spatial_buffer_m is not None:
             self._apply_buffer()
@@ -119,11 +154,29 @@ class LeafWrapper:
         
     def to_region_dict(self, use_target_fid: bool = True) -> Dict[int, Dict]:
         """
-        Convert loaded geometries to dict suitable for ProdParams['regions'].
-        Keys: TARGET_FID if available, otherwise index (0-based).
-        Values: {'coordinates': [...], 'start_date': ..., 'end_date': ...}
-        Handles Polygon and MultiPolygon geometries.
-        All coordinates are converted to EPSG:4326 (geographic).
+        Convert loaded geometries into a LEAF-compatible region dictionary.
+
+        Actions performed:
+        -----------------
+        - Converts all geometries to EPSG:4326
+        - Handles Polygon and MultiPolygon geometries
+        - Optionally merges MultiPolygons into a single bounding-box polygon
+        - Generates a dictionary keyed by TARGET_FID or other ID columns
+
+        Parameters:
+        -----------
+        use_target_fid : bool
+            If True, use "TARGET_FID" column as the dictionary key (if available)
+
+        Returns:
+        --------
+        regions : dict
+            Dictionary mapping region IDs to GeoJSON-like Polygon data:
+            Example: {'region20': {"r_id": 20, "coordinates": [[...]]}, ...}
+
+        Raises:
+        -------
+        ValueError : If GeoDataFrame is not loaded
         """
         if self.gdf is None:
             raise ValueError("No polygon file loaded. Call `.load()` first.")
@@ -133,14 +186,18 @@ class LeafWrapper:
         
         regions = {}
         for idx, row in gdf_geo.iterrows():
-            # Priority: TARGET_FID > SiteID > index
+            # Priority: TARGET_FID > SiteID > pointid > OBJECTID > index
             key = None
             if use_target_fid and "TARGET_FID" in gdf_geo.columns:
                 key = int(row["TARGET_FID"])
             elif "SiteID" in gdf_geo.columns:
                 key = int(row["SiteID"])
+            elif "pointid" in gdf_geo.columns:
+                key = int(row["pointid"])
             elif "OBJECTID" in gdf_geo.columns:
                 key = int(row["OBJECTID"])
+            elif "id" in gdf_geo.columns:
+                key = row["id"]   # keep as string
             else:
                 # Fallback to 0-based index
                 key = idx if isinstance(idx, int) else 0
@@ -151,135 +208,74 @@ class LeafWrapper:
     
             coords = []
     
+            
             if geom.geom_type == "Polygon":
-                # single polygon
-                ring_coords = [list(pt) for pt in geom.exterior.coords]
-                if ring_coords[0] != ring_coords[-1]:
-                    ring_coords.append(ring_coords[0])
-                coords.append(ring_coords)
-    
+                ring = [list(pt) for pt in geom.exterior.coords]
+                if ring[0] != ring[-1]:
+                    ring.append(ring[0])
+                coords.append([ring])   # wrap polygon consistently
+
             elif geom.geom_type == "MultiPolygon":
-                # multiple polygons
                 for poly in geom.geoms:
-                    ring_coords = [list(pt) for pt in poly.exterior.coords]
-                    if ring_coords[0] != ring_coords[-1]:
-                        ring_coords.append(ring_coords[0])
-                    coords.append(ring_coords)
-    
-            else:
-                raise ValueError(f"Unsupported geometry type: {geom.geom_type}. Only Polygon and MultiPolygon are supported after buffering.")
-    
-            start_date = row.get("AsssD_1")
-            end_date   = row.get("AsssD_2")
-    
+                    ring = [list(pt) for pt in poly.exterior.coords]
+                    if ring[0] != ring[-1]:
+                        ring.append(ring[0])
+                    coords.append([ring])  # wrap polygon
+
+            # If there are multiple polygon entries, compute one bounding-box polygon (axis-aligned).
+            if len(coords) > 1:
+                shapely_polys = []
+                for poly in coords:
+                    # each `poly` is [[ring]] (you only keep the exterior ring)
+                    ring = poly[0]
+                    p = ShapelyPolygon(ring)
+                    if not p.is_valid:
+                        p = p.buffer(0)
+                    if not p.is_empty:
+                        shapely_polys.append(p)
+
+                if shapely_polys:
+                    merged = unary_union(shapely_polys)
+                    minx, miny, maxx, maxy = merged.bounds
+
+                    # Build bbox ring (closed)
+                    bbox_ring = [
+                        [minx, miny],
+                        [maxx, miny],
+                        [maxx, maxy],
+                        [minx, maxy],
+                        [minx, miny],
+                    ]
+
+                    # Replace coords with a single polygon: [[bbox_ring]]
+                    coords = [[bbox_ring]]
+
+            # then proceed to package `regions[key]` as you already do:
+            #start_date = row.get("AsssD_1")
+            #end_date   = row.get("AsssD_2")
+
             regions[key] = {
-                "id": key,
-                "coordinates": coords,
-                "start_date": start_date,
-                "end_date": end_date
+                "r_id": key,
+                "coordinates": coords[0],
+            # "start_date": start_date,
+            # "end_date": end_date
             }
+
     
         return regions
-'''
+
+
 #############################################################################################################
-# Description: This function reads a KML file containing multiple polygon features and converts them
-#              into a LEAF-compatible region dictionary. The output dictionary maps user-defined
-#              region names to GeoJSON-like Polygon objects, which can be directly passed to
-#              ProdParams['regions'] for mosaic generation.
+# Function: drop_z
 #
+# Description:
+#  ------------
+#  Removes the Z coordinate (altitude) from a Shapely geometry if present.
+#  Converts 3D coordinates (x, y, z) to 2D (x, y), which is required for LEAF regions.
+#  If the geometry has no Z coordinate, it is returned unchanged.
 #############################################################################################################
-def regions_from_kml(kml_file, start=5,  end=7, prefix="region"):
-    """
-    Load a KML and return a dict of polygon regions:
-    {
-        'region1': {...},
-        'region2': {...},
-        ...
-    }
-    """
-    if start < 1 or end < start:
-        raise ValueError("Invalid start or end values. 'start' must be >= 1 and 'end' must be >= 'start'.")
-    
-    wrapper = LeafWrapper(kml_file).load()
-    regions_dict = wrapper.to_region_dict()  # keys = TARGET_FID
-
-    out = {}
-    for i in range(start, min(end, len(regions_dict)) + 1):
-        region_data = regions_dict[i]
-        out[f"{prefix}{i}"] = {
-            "type": "Polygon",
-            "coordinates": region_data["coordinates"],
-        }
-
-    return out
-
-class LeafWrapper:
-    def __init__(self, polygon_file):
-        self.polygon_file = Path(polygon_file)
-        self.gdf = None
-
-    def load(self):
-        """Load the polygon file into a GeoDataFrame"""
-        if not self.polygon_file.exists():
-            raise FileNotFoundError(f"Polygon file not found: {self.polygon_file}")
-
-        ext = self.polygon_file.suffix.lower()
-        if ext == ".kml":
-            self.gdf = gpd.read_file(self.polygon_file, driver="KML")
-        else:
-            self.gdf = gpd.read_file(self.polygon_file)
-
-        if self.gdf.empty:
-            raise ValueError("Loaded polygon file contains no geometries.")
-        return self
-        
-    def to_region_dict(self, use_target_fid: bool = True) -> Dict[int, Dict]:
-        """
-        Convert loaded geometries to dict suitable for ProdParams['regions'].
-        Keys: TARGET_FID or index.
-        Values: {'coordinates': [...], 'start_date': ..., 'end_date': ...}
-        Handles Polygon and MultiPolygon geometries.
-        """
-        if self.gdf is None:
-            raise ValueError("No polygon file loaded. Call `.load()` first.")
-    
-        regions = {}
-        for idx, row in self.gdf.iterrows():
-            key = int(row["TARGET_FID"]) if use_target_fid and "TARGET_FID" in row else idx
-    
-            geom = row.geometry
-            if geom.is_empty:
-                continue
-    
-            coords = []
-    
-            if geom.geom_type == "Polygon":
-                # single polygon
-                ring_coords = [list(pt) for pt in geom.exterior.coords]
-                if ring_coords[0] != ring_coords[-1]:
-                    ring_coords.append(ring_coords[0])
-                coords.append(ring_coords)
-    
-            elif geom.geom_type == "MultiPolygon":
-                # multiple polygons
-                for poly in geom.geoms:
-                    ring_coords = [list(pt) for pt in poly.exterior.coords]
-                    if ring_coords[0] != ring_coords[-1]:
-                        ring_coords.append(ring_coords[0])
-                    coords.append(ring_coords)
-    
-            else:
-                raise ValueError(f"Unsupported geometry type: {geom.geom_type}")
-    
-            start_date = row.get("AsssD_1")
-            end_date   = row.get("AsssD_2")
-    
-            regions[key] = {
-                "coordinates": coords,
-                "start_date": start_date,
-                "end_date": end_date
-            }
-    
-        return regions
-
-'''
+def drop_z(geom):
+    """Remove the Z coordinate (altitude) from a Shapely geometry"""
+    if geom.has_z:
+        return transform(lambda x, y, z=None: (x, y), geom)
+    return geom

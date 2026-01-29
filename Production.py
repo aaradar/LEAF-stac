@@ -89,6 +89,11 @@ ProdParams = {
     'out_datatype': 'int16',     # 'int8' or 'int16'
     'projection': 'EPSG:3979',
     'IncludeAngles': False,
+    'spatial_buffer_m': 300,
+    'regions_start_index': 0,
+    'regions_end_index': 5,
+    #'temporal_buffer': [-30, 10], # days before and after the time window
+    #'num_years': 3 ,            # number of years to include in the composite
     #'start_dates': ['2025-06-15'],
     #'end_dates': ['2025-09-15'],
     #'regions': {'ottawa': ottawa_region}  #, {'vancouver': vancouver_region}    
@@ -115,6 +120,7 @@ def MosaicProduction(ProdParams, CompParams):
   # Handle KML-based regions
   # The call converts given KML file input to LEAF-compatible region dictionary
   # ----------------------------------------------------------------------------------------------------------
+  
   try:
     regions = ProdParams.get("regions")
 
@@ -126,6 +132,8 @@ def MosaicProduction(ProdParams, CompParams):
 
         ProdParams["regions"] = leafWrapper.regions_from_kml(
             regions,
+            start=ProdParams.get("regions_start_index", 0),
+            end=ProdParams.get("regions_end_index", 5),
             spatial_buffer_m=spatial_buffer_m
         )
 
@@ -242,37 +250,3 @@ if __name__ == "__main__":
   args = parser.parse_args()
 
   main(args.ProdParams, args.CompParams)
-
-'''
-
-try:
-      regions = ProdParams.get("regions")
-
-      if regions.lower().endswith(".kml"):
-          print("<MosaicProduction> Detected KML regions input, loading regions from KML...")
-          ProdParams["regions"] = leafWrapper.regions_from_kml(regions)
-
-  except (AttributeError, TypeError):
-      # regions is None or not a string — skip silently
-      pass
-
-
-
-
-try:
-    regions = ProdParams.get("regions")
-
-    if isinstance(regions, str) and regions.lower().endswith((".kml", ".shp")):
-        print("<MosaicProduction> Detected file-based regions input, loading regions...")
-
-        # Apply buffer only for SHP
-        spatial_buffer_m = 1000 if regions.lower().endswith(".shp") else None
-
-        ProdParams["regions"] = leafWrapper.regions_from_kml(
-            regions,
-            spatial_buffer_m=spatial_buffer_m
-        )
-
-  except (AttributeError, TypeError):
-      # regions is None or not a string — skip silently
-      pass'''
